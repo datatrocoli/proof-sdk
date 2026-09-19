@@ -1311,6 +1311,15 @@ function attachAuthenticatedCollabPresence(socketId: string, auth: CollabAuthCon
       const timer = setInterval(() => {
         try {
           noteDocumentLiveCollabLease(auth.slug, auth.accessEpoch as number);
+          // Keep the connection record alive alongside the document lease.
+          // Otherwise an open socket disappears from exactEpochCount after its TTL.
+          upsertActiveCollabConnection({
+            connectionId,
+            slug: auth.slug,
+            role: auth.role,
+            accessEpoch: auth.accessEpoch as number,
+            instanceId: ACTIVE_COLLAB_INSTANCE_ID,
+          });
         } catch {
           // best-effort heartbeat
         }
