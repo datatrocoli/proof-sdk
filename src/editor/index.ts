@@ -1220,8 +1220,13 @@ class ProofEditorImpl implements ProofEditor {
       .use(keybindingsPlugin)
       // Allow Backspace to delete empty table rows
       .use(tableKeyboardPlugin)
-      .use(marksSyncPlugin((actionMarks, view, actionMetadata) => {
-        this.handleMarksChange(actionMarks, view, actionMetadata);
+      .use(marksSyncPlugin((_actionMarks, view) => {
+        // Finish all editor plugin updates (including Yjs content sync) before
+        // publishing marks. Publishing inside view.update can race the fragment.
+        queueMicrotask(() => {
+          if (view.isDestroyed) return;
+          this.handleMarksChange(getMarks(view.state), view, getMarkMetadataWithQuotes(view.state));
+        });
       }))
       .config((ctx) => {
         // Note: remarkProofMarks is now registered via .use(remarkProofMarksPlugin)
@@ -2517,6 +2522,7 @@ class ProofEditorImpl implements ProofEditor {
     });
     this.updateEditableState();
     this.updateShareBannerTitleDisplay();
+    this.updateSuggestionToggle();
   }
 
   private ensureShareWebSocketConnection(): void {
@@ -3448,9 +3454,40 @@ class ProofEditorImpl implements ProofEditor {
     this.updateShareBannerSyncDisplay();
 
     const shareBtn = this.createShareMenuButton();
+    const suggesting = document.createElement('button');
+    suggesting.id = 'share-suggesting-toggle';
+    suggesting.type = 'button';
+    suggesting.setAttribute('role', 'switch');
+    suggesting.setAttribute('aria-label', 'Suggesting');
+    suggesting.style.cssText = 'display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;color:#374151;padding:8px;min-height:44px;flex-shrink:0;font:inherit;cursor:pointer;';
+    const track = document.createElement('span');
+    track.className = 'suggesting-track';
+    track.style.cssText = 'display:inline-block;width:34px;height:22px;border-radius:12px;background:#9ca3af;position:relative;';
+    const thumb = document.createElement('span');
+    thumb.style.cssText = 'position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:white;transition:transform .15s;';
+    track.append(thumb);
+    suggesting.append(track, document.createTextNode('Suggesting'));
+    suggesting.addEventListener('click', () => {
+      if (!this.shareAllowLocalEdits) return;
+      this.toggleSuggestions();
+      this.updateSuggestionToggle();
+    });
 
-    banner.replaceChildren(wordmark, separator, title, syncStatusSep, syncStatusInline, avatars, agentSlot, shareBtn);
+    banner.replaceChildren(wordmark, separator, title, syncStatusSep, syncStatusInline, avatars, agentSlot, shareBtn, suggesting);
+    this.updateSuggestionToggle();
     this.scheduleBannerLayoutUpdate();
+  }
+
+  private updateSuggestionToggle(): void {
+    const button = document.getElementById('share-suggesting-toggle') as HTMLButtonElement | null;
+    if (!button) return;
+    const enabled = this.isSuggestionsEnabled();
+    button.setAttribute('aria-checked', String(enabled));
+    button.disabled = !this.shareAllowLocalEdits;
+    button.style.opacity = button.disabled ? '0.5' : '1';
+    const track = button.querySelector('.suggesting-track') as HTMLElement;
+    track.style.background = enabled ? '#2563eb' : '#9ca3af';
+    (track.firstElementChild as HTMLElement).style.transform = enabled ? 'translateX(12px)' : 'none';
   }
 
   private uninstallShareAgentPresenceObservers(): void {
@@ -4635,6 +4672,7 @@ class ProofEditorImpl implements ProofEditor {
     this.shareOtherViewerCount = Math.max(0, viewers);
     this.renderShareBannerContent(banner, this.shareOtherViewerCount);
     document.body.appendChild(banner);
+    this.updateSuggestionToggle();
     this.scheduleBannerLayoutUpdate();
   }
 
@@ -5204,6 +5242,7 @@ class ProofEditorImpl implements ProofEditor {
       (view as any).dispatch = (tr: any) => {
         const dispatchWithRevision = (transaction: any) => {
           originalDispatch(transaction);
+          this.updateSuggestionToggle();
           if (transaction?.docChanged) {
             this.revision += 1;
           }
@@ -8563,6 +8602,26 @@ class ProofEditorImpl implements ProofEditor {
     if (!this.editor) {
       console.warn('[markReject] Editor not initialized');
       return false;
+    }
+
+    if (this.isShareMode) {
+      let pending = false;
+      this.editor.action((ctx) => {
+        pending = getPendingSuggestions(getMarks(ctx.get(editorViewCtx).state)).some(mark => mark.id === markId);
+      });
+      if (!pending) return false;
+      // Finalize on the server before changing shared anchors. Optimistic anchor
+      // removal can reach Yjs before the API reads the suggestion it must reject.
+      void shareClient.rejectSuggestion(markId, getCurrentActor()).then(result => {
+        if (!result || 'error' in result || !result.success || !result.marks) return;
+        const marks = result.marks as Record<string, StoredMark>;
+        this.lastReceivedServerMarks = { ...marks };
+        this.initialMarksSynced = true;
+        this.editor?.action(ctx => {
+          applyRemoteMarks(ctx.get(editorViewCtx), marks, { hydrateAnchors: this.collabCanEdit });
+        });
+      }).catch(error => console.error('[markReject] Failed to persist rejection:', error));
+      return true;
     }
 
     let success = false;

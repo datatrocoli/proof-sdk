@@ -473,9 +473,7 @@ function applyMarksMapDiff(map: Y.Map<unknown>, next: Record<string, unknown>): 
 }
 
 function replaceYXmlFragment(fragment: Y.XmlFragment, pmDoc: unknown): void {
-  if (fragment.length > 0) {
-    fragment.delete(0, fragment.length);
-  }
+  // Reconcile in place so connected editors retain identities for unchanged nodes.
   prosemirrorToYXmlFragment(pmDoc as any, fragment as any);
 }
 
@@ -1102,7 +1100,10 @@ export async function mutateCanonicalDocument(args: CanonicalMutationArgs): Prom
       }
     }
 
-    const persistedCandidateDoc = cloneYDocWithHistory(persistedState.ydoc);
+    // Use one shared CRDT history for durable storage and connected editors.
+    // Rebuilding each independently gives the same text different Yjs identities.
+    const persistedCandidateDoc = cloneYDocWithHistory(ydoc);
+    Y.applyUpdate(persistedCandidateDoc, Y.encodeStateAsUpdate(persistedState.ydoc));
     persistedCandidateDoc.transact(() => {
       replaceYXmlFragment(persistedCandidateDoc.getXmlFragment('prosemirror'), parsedNext.doc);
       applyYTextDiff(persistedCandidateDoc.getText('markdown'), authoritativeNextMarkdown);
@@ -1171,11 +1172,11 @@ export async function mutateCanonicalDocument(args: CanonicalMutationArgs): Prom
     let nextRevision = doc.revision + 1;
     let nextYStateVersion = Math.max(doc.y_state_version, persistedState.yStateVersion);
 
-    ydoc.transact(() => {
-      replaceYXmlFragment(ydoc.getXmlFragment('prosemirror'), parsedNext.doc);
-      applyYTextDiff(ydoc.getText('markdown'), authoritativeNextMarkdown);
-      applyMarksMapDiff(ydoc.getMap('marks'), effectiveNextMarks);
-    }, canonicalTransactionOrigin(args.source));
+    Y.applyUpdate(
+      ydoc,
+      Y.encodeStateAsUpdate(persistedCandidateDoc, Y.encodeStateVector(ydoc)),
+      canonicalTransactionOrigin(args.source),
+    );
 
     const tx = getDb().transaction(() => {
       if (deltaUpdate.byteLength > 0) {

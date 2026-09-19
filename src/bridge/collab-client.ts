@@ -606,7 +606,11 @@ export class CollabClient {
       if (!this.marksHandler) return;
       if (transaction.origin === 'local-marks-sync') return;
       if (this.applyingLocalMarks) return;
-      this.marksHandler(this.readMarks());
+      // Consume the document update before hydrating its corresponding anchors.
+      queueMicrotask(() => {
+        if (this.provider !== provider || !this.marksHandler) return;
+        this.marksHandler(this.readMarks());
+      });
     });
 
     provider.on('awarenessChange', (event: { states: Array<unknown> }) => {

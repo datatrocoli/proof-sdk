@@ -1242,7 +1242,7 @@ class MarkPopoverController {
 
     const applyButton = document.createElement('button');
     applyButton.type = 'button';
-    applyButton.textContent = 'Apply';
+    applyButton.textContent = 'Accept';
     installTouchSafeButton(applyButton, () => {
       if (!canEdit) return;
       const proof = getProofEditorApi();
