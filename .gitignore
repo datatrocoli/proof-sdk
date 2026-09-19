@@ -72,6 +72,6 @@ test-results/
 .playwright-mcp/
 
 # Package locks (keep package.json)
-package-lock.json
+# Commit the lockfile for reproducible Docker builds.
 CODEX-IMPLEMENT.md
 MOBILE-ACTION-BAR-PLAN.md

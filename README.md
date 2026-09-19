@@ -25,6 +25,43 @@ If you want the hosted product, use [Proof](https://proofeditor.ai). Hosted Proo
 
 ## Local Development
 
+### Docker Compose (local experiment)
+
+With Docker running, start the built editor and server:
+
+```bash
+docker compose up --build -d
+```
+
+Open http://localhost:3020. The root page is SDK information; documents open
+at `/d/<slug>`. Create a document through `POST /documents` with a JSON body
+such as `{"title":"Test","markdown":"# Test\n\nA local document."}`.
+The response includes an editor link in `tokenUrl`; keep that link and the
+returned owner secret private.
+
+This packages the upstream SDK without adding account login or changing its
+permissions. It is an experiment, not a hardened hosted deployment. The port
+is bound to `127.0.0.1` so it is accessible only on the Docker host. Collaboration
+uses the same port. SQLite and snapshots persist in the `proof-local_proof-data`
+Docker volume. Collaboration session signing uses the SDK's temporary key;
+clients may need to reconnect after a server restart.
+
+```bash
+docker compose ps                 # Check health
+docker compose logs --tail=50     # Inspect startup
+docker compose down              # Stop and remove containers; keep documents
+docker compose up -d              # Start again
+```
+
+To remove the experiment **and permanently delete its documents**:
+
+```bash
+docker compose down --volumes --rmi local
+```
+
+The image uses Node 22, installs the committed dependency lockfile, builds the
+editor, and runs as the non-root `node` user. No host Node installation is needed.
+
 Requirements:
 
 - Node.js 18+
