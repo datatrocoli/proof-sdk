@@ -6628,6 +6628,14 @@ class ProofEditorImpl implements ProofEditor {
     });
   }
 
+  private showSavedReviewRefreshError(action: 'accept' | 'reject', error: unknown): void {
+    console.error(`[markReview] ${action} saved, but the editor could not refresh:`, error);
+    this.showErrorBanner(`Suggestion ${action === 'accept' ? 'accepted' : 'rejected'} and saved. Reload to refresh this view.`, {
+      retryLabel: 'Reload',
+      onRetry: () => window.location.reload(),
+    });
+  }
+
   /**
    * Accept all pending suggestions
    */
@@ -8562,11 +8570,13 @@ class ProofEditorImpl implements ProofEditor {
       }
 
       const actor = getCurrentActor();
+      let reviewSaved = false;
       void shareClient.acceptSuggestion(markId, actor).then((result) => {
         if (!result || 'error' in result || result.success !== true) {
           this.showSuggestionReviewError('accept', markId, result);
           return;
         }
+        reviewSaved = true;
         this.clearErrorBanner();
         const serverMarks = (result.marks && typeof result.marks === 'object' && !Array.isArray(result.marks))
           ? result.marks as Record<string, StoredMark>
@@ -8578,12 +8588,14 @@ class ProofEditorImpl implements ProofEditor {
           this.editor.action((innerCtx) => {
             const innerView = innerCtx.get(editorViewCtx);
             applyRemoteMarks(innerView, serverMarks, { hydrateAnchors: this.collabCanEdit });
-            const stats = getAuthorshipStats(innerView);
-            this.bridge.authorshipStatsUpdated(stats);
           });
         }
         captureEvent('suggestion_accepted', { count: 1 });
       }).catch((error) => {
+        if (reviewSaved) {
+          this.showSavedReviewRefreshError('accept', error);
+          return;
+        }
         console.error('[markAccept] Failed to persist suggestion acceptance via share mutation:', error);
         this.showSuggestionReviewError('accept', markId);
       });
@@ -8623,8 +8635,6 @@ class ProofEditorImpl implements ProofEditor {
       }
       if (success) {
         captureEvent('suggestion_accepted', { count: 1 });
-        const stats = getAuthorshipStats(view);
-        this.bridge.authorshipStatsUpdated(stats);
       }
     });
 
@@ -8648,11 +8658,13 @@ class ProofEditorImpl implements ProofEditor {
       if (!pending) return false;
       // Finalize on the server before changing shared anchors. Optimistic anchor
       // removal can reach Yjs before the API reads the suggestion it must reject.
+      let reviewSaved = false;
       void shareClient.rejectSuggestion(markId, getCurrentActor()).then(result => {
         if (!result || 'error' in result || !result.success || !result.marks) {
           this.showSuggestionReviewError('reject', markId, result);
           return;
         }
+        reviewSaved = true;
         this.clearErrorBanner();
         const marks = result.marks as Record<string, StoredMark>;
         this.lastReceivedServerMarks = { ...marks };
@@ -8661,6 +8673,10 @@ class ProofEditorImpl implements ProofEditor {
           applyRemoteMarks(ctx.get(editorViewCtx), marks, { hydrateAnchors: this.collabCanEdit });
         });
       }).catch(error => {
+        if (reviewSaved) {
+          this.showSavedReviewRefreshError('reject', error);
+          return;
+        }
         console.error('[markReject] Failed to persist rejection:', error);
         this.showSuggestionReviewError('reject', markId);
       });
@@ -8742,8 +8758,6 @@ class ProofEditorImpl implements ProofEditor {
           this.editor.action((innerCtx) => {
             const innerView = innerCtx.get(editorViewCtx);
             applyRemoteMarks(innerView, latestServerMarks!, { hydrateAnchors: this.collabCanEdit });
-            const stats = getAuthorshipStats(innerView);
-            this.bridge.authorshipStatsUpdated(stats);
           });
         }
         if (acceptedCount > 0) {
@@ -8795,8 +8809,6 @@ class ProofEditorImpl implements ProofEditor {
       }
       if (count > 0) {
         captureEvent('suggestion_accepted', { count });
-        const stats = getAuthorshipStats(view);
-        this.bridge.authorshipStatsUpdated(stats);
       }
     });
 
@@ -8852,8 +8864,6 @@ class ProofEditorImpl implements ProofEditor {
       }
       if (count > 0) {
         captureEvent('suggestion_rejected', { count });
-        const stats = getAuthorshipStats(view);
-        this.bridge.authorshipStatsUpdated(stats);
       }
     });
     return count;
