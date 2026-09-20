@@ -3971,12 +3971,29 @@ class ProofEditorImpl implements ProofEditor {
   }
 
   private async copyAgentInviteWithFallback(): Promise<boolean> {
+    const menu = document.querySelector<HTMLElement>('[data-agent-menu]');
+    menu?.querySelector('[role="alert"]')?.remove();
+    const fail = (message: string): false => {
+      if (menu?.isConnected) {
+        const error = document.createElement('p');
+        error.setAttribute('role', 'alert');
+        error.textContent = message;
+        error.style.cssText = 'margin:8px 12px;color:#fca5a5;font-size:12px;line-height:1.4;';
+        menu.appendChild(error);
+      }
+      return false;
+    };
     try {
       // The address bar may omit the token when browser access uses a cookie.
       // Mint a separate review credential instead of copying an unusable URL
       // or forwarding the owner's credential to another agent.
       const link = await shareClient.createAccessLink('commenter');
-      if (!link || 'error' in link) return false;
+      if (!link) return fail('The server did not return an invitation. Try again.');
+      if ('error' in link) {
+        return fail(link.error.status === 401 || link.error.status === 403
+          ? 'This link cannot invite agents. Open the document with an editor link and try again.'
+          : 'Could not create the invitation. Check that the local Proof server is running, then try again.');
+      }
       const message = buildAgentInvite(link.webShareUrl);
       const copied = await this.copyTextToClipboard(message);
       if (copied) {
@@ -3985,7 +4002,7 @@ class ProofEditorImpl implements ProofEditor {
       }
       return this.copyWithPromptFallback(message, 'Copy agent invite:');
     } catch {
-      return false;
+      return fail('Could not create the invitation. Check that the local Proof server is running, then try again.');
     }
   }
 
@@ -4419,6 +4436,7 @@ class ProofEditorImpl implements ProofEditor {
 
       const menu = document.createElement('div');
       menu.setAttribute('role', 'menu');
+      menu.dataset.agentMenu = 'true';
       menu.style.cssText = `
         position:absolute;top:calc(100% + 8px);right:0;min-width:280px;max-width:min(360px, calc(100vw - 24px));
         background:rgba(17,24,39,0.96);border:1px solid rgba(255,255,255,0.12);
@@ -4467,8 +4485,12 @@ class ProofEditorImpl implements ProofEditor {
         right.style.cssText = 'font-weight:600;opacity:0.85';
         item.append(left, right);
         item.onclick = async () => {
-          if (options?.disabled) return;
-          const ok = await onSelect();
+          if (item.disabled) return;
+          item.disabled = true;
+          right.textContent = 'Working…';
+          let ok = false;
+          try { ok = await onSelect(); }
+          finally { item.disabled = false; }
           right.textContent = ok ? (options?.successText ?? 'Done') : (options?.failureText ?? 'Failed');
           if (ok) {
             setTimeout(() => cleanup(), 400);

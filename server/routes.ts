@@ -906,7 +906,11 @@ apiRoutes.post('/documents/:slug/access-links', async (req: Request, res: Respon
   const ownerAuthorized = canOwnerMutate(req, doc) || await ownerAuthorizedViaOAuth(req, doc.owner_id);
   const secret = getPresentedSecret(req);
   const role = secret ? resolveDocumentAccessRole(slug, secret) : null;
-  const canCreateAccessLinks = ownerAuthorized || role === 'editor' || role === 'owner_bot';
+  // Active, tokenless document links already grant browser editing (the slug
+  // is the secret). Let that same page invite an agent for review, without
+  // minting an editor credential or treating an invalid token as anonymous.
+  const tokenlessReviewInvite = !secret && doc.share_state === 'ACTIVE' && req.body?.role === 'commenter';
+  const canCreateAccessLinks = ownerAuthorized || role === 'editor' || role === 'owner_bot' || tokenlessReviewInvite;
   if (!canCreateAccessLinks) {
     res.status(403).json({ error: 'Not authorized to create access links' });
     return;

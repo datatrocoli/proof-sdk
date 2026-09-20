@@ -53,7 +53,33 @@ try {
   assert.ok(!invitation.includes('<token-from-doc-url>'));
   assert.ok(invitation.includes('local MCP connector'));
 
-  const config = { baseUrl, slug, token: link.accessToken, agentId: 'claude-test', name: 'Claude test' };
+  // Regression: a plain document URL may have neither a query token nor a
+  // cookie. The editable browser page must still be able to invite a reviewer.
+  (globalThis as any).window.__PROOF_CONFIG__ = {};
+  const tokenlessLink = await new ShareClient().createAccessLink('commenter');
+  assert.ok(tokenlessLink && !('error' in tokenlessLink), 'Plain document links can invite a reviewer');
+  assert.ok(buildAgentInvite(tokenlessLink.webShareUrl).includes(tokenlessLink.accessToken));
+  for (const role of ['editor', 'viewer', 'owner_bot']) {
+    assert.equal((await post(`/api/documents/${slug}/access-links`, { role })).status, 403,
+      'Tokenless invitation must not mint other credentials');
+  }
+  for (const token of ['invalid-token', tokenlessLink.accessToken]) {
+    assert.equal((await post(`/api/documents/${slug}/access-links`, { role: 'commenter' }, token)).status, 403,
+      'Invalid and reviewer credentials must not fall back to anonymous invitation');
+  }
+  const viewer = await (await post(`/api/documents/${slug}/access-links`, { role: 'viewer' }, accessToken)).json();
+  assert.equal((await post(`/api/documents/${slug}/access-links`, { role: 'commenter' }, viewer.accessToken)).status, 403);
+
+  const unavailable = await (await post('/documents', { markdown: 'Unavailable invitation test.' })).json();
+  const { pauseDocument, revokeDocument, deleteDocument } = await import('../../server/db.js');
+  pauseDocument(unavailable.slug);
+  assert.equal((await post(`/api/documents/${unavailable.slug}/access-links`, { role: 'commenter' })).status, 403);
+  revokeDocument(unavailable.slug);
+  assert.equal((await post(`/api/documents/${unavailable.slug}/access-links`, { role: 'commenter' })).status, 403);
+  deleteDocument(unavailable.slug);
+  assert.equal((await post(`/api/documents/${unavailable.slug}/access-links`, { role: 'commenter' })).status, 410);
+
+  const config = { baseUrl, slug, token: tokenlessLink.accessToken, agentId: 'claude-test', name: 'Claude test' };
   assert.throws(() => createProofMcp({ ...config, baseUrl: 'https://example.com' }), /local server/);
   const configPath = path.join(dir, 'mcp.json');
   writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
@@ -73,7 +99,7 @@ try {
     assert.ok(!result.isError, `${name} should succeed: ${JSON.stringify(result.content)}`);
     const content = result.content as Array<{ type: string; text: string }>;
     const text = content[0].text;
-    assert.ok(!text.includes(link.accessToken), 'Tool results must not expose the credential');
+    assert.ok(!text.includes(config.token), 'Tool results must not expose the credential');
     return JSON.parse(text);
   }
   assert.match((await call('proof_read')).markdown, /Original sentence/);
@@ -89,13 +115,13 @@ try {
   assert.ok(!reviewed.markdown.includes('Proposed sentence.'));
   const denied = await post(`/documents/${slug}/ops`, {
     type: 'suggestion.accept', id: suggestion.id, by: 'ai:claude-test',
-  }, link.accessToken);
+  }, config.token);
   assert.equal(denied.status, 403, 'The review token cannot approve its own suggestion');
   const acceptedPayload = { type: 'suggestion.add', kind: 'replace', status: 'accepted',
     quote: 'Original sentence.', content: 'Bypassed review.', by: 'ai:claude-test' };
   for (const route of [`/documents/${slug}/ops`, `/api/documents/${slug}/ops`,
     `/documents/${slug}/marks/suggest-replace`]) {
-    const response = await post(route, acceptedPayload, link.accessToken);
+    const response = await post(route, acceptedPayload, config.token);
     // The direct mark endpoint's existing checkAuth uses 401 for a disallowed role.
     assert.equal(response.status, route.includes('/marks/') ? 401 : 403,
       `Review access must reject immediately accepted suggestions at ${route}`);
