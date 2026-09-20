@@ -3833,10 +3833,10 @@ class ProofEditorImpl implements ProofEditor {
     const body = document.createElement('div');
     body.style.cssText = 'padding:14px 16px 16px 16px;color:rgba(255,255,255,0.86);font-size:12px;line-height:1.5;';
     body.innerHTML = `
-      <p style="margin:0 0 10px 0;">Agent collaborators can suggest and edit with the same permissions as the link you share.</p>
+      <p style="margin:0 0 10px 0;">A suggestion invitation lets an agent comment and propose changes for your approval. An editing invitation also lets it change text directly and accept or reject suggestions.</p>
       <p style="margin:0 0 8px 0;"><strong>How to connect:</strong></p>
       <ol style="margin:0 0 10px 18px;padding:0;">
-        <li>Copy the agent invite link.</li>
+        <li>Choose a suggestion or editing invitation and copy it.</li>
         <li>Paste it into your AI tool (for example, ChatGPT or Claude).</li>
         <li>The agent appears here when connected.</li>
       </ol>
@@ -3970,7 +3970,7 @@ class ProofEditorImpl implements ProofEditor {
     return prompted;
   }
 
-  private async copyAgentInviteWithFallback(): Promise<boolean> {
+  private async copyAgentInviteWithFallback(role: 'commenter' | 'editor' = 'commenter'): Promise<boolean> {
     const menu = document.querySelector<HTMLElement>('[data-agent-menu]');
     menu?.querySelector('[role="alert"]')?.remove();
     const fail = (message: string): false => {
@@ -3985,16 +3985,17 @@ class ProofEditorImpl implements ProofEditor {
     };
     try {
       // The address bar may omit the token when browser access uses a cookie.
-      // Mint a separate review credential instead of copying an unusable URL
+      // Mint a separate credential with the chosen role instead of copying an unusable URL
       // or forwarding the owner's credential to another agent.
-      const link = await shareClient.createAccessLink('commenter');
+      const link = await shareClient.createAccessLink(role);
       if (!link) return fail('The server did not return an invitation. Try again.');
       if ('error' in link) {
         return fail(link.error.status === 401 || link.error.status === 403
           ? 'This link cannot invite agents. Open the document with an editor link and try again.'
           : 'Could not create the invitation. Check that the local Proof server is running, then try again.');
       }
-      const message = buildAgentInvite(link.webShareUrl);
+      if (link.role !== role) return fail('The invitation has the wrong access level. Try again.');
+      const message = buildAgentInvite(link.webShareUrl, role);
       const copied = await this.copyTextToClipboard(message);
       if (copied) {
         this.triggerHaptic('success');
@@ -4507,11 +4508,14 @@ class ProofEditorImpl implements ProofEditor {
         header.textContent = 'Add an agent';
         header.style.cssText = 'padding:8px 12px 4px;color:#fff;font-size:13px;font-weight:700;';
         const body = document.createElement('div');
-        body.textContent = 'Invite an agent to comment and suggest changes for your review.';
+        body.textContent = 'Suggestions need your approval. Editing access also lets the agent change text directly and review suggestions.';
         body.style.cssText = 'padding:0 12px 8px;color:rgba(255,255,255,0.78);font-size:12px;line-height:1.35;';
         menu.append(header, body);
-        addMenuButton('Copy agent invite link', async () => this.copyAgentInviteWithFallback(), {
+        addMenuButton('Copy suggestion invite', async () => this.copyAgentInviteWithFallback('commenter'), {
           successText: 'Copied',
+        });
+        addMenuButton('Copy editing invite', async () => this.copyAgentInviteWithFallback('editor'), {
+          successText: 'Copied', disabled: !this.collabCanEdit,
         });
         addDivider();
         addMenuButton('How agent access works', async () => {
@@ -4587,8 +4591,15 @@ class ProofEditorImpl implements ProofEditor {
           menu.appendChild(row);
         }
         addDivider();
-        addMenuButton('Copy agent invite link', async () => this.copyAgentInviteWithFallback(), {
+        const accessHelp = document.createElement('p');
+        accessHelp.textContent = 'Editing access allows direct changes and accepting or rejecting suggestions.';
+        accessHelp.style.cssText = 'margin:8px 12px;color:rgba(255,255,255,0.78);font-size:12px;line-height:1.35;';
+        menu.appendChild(accessHelp);
+        addMenuButton('Copy suggestion invite', async () => this.copyAgentInviteWithFallback('commenter'), {
           successText: 'Copied',
+        });
+        addMenuButton('Copy editing invite', async () => this.copyAgentInviteWithFallback('editor'), {
+          successText: 'Copied', disabled: !this.collabCanEdit,
         });
       }
 
@@ -4819,7 +4830,10 @@ class ProofEditorImpl implements ProofEditor {
         this.lastReceivedServerMarks = { ...metadata };
         this.initialMarksSynced = true;
         const serializer = ctx.get(serializerCtx);
-        const markdown = this.normalizeMarkdownForRuntime(serializer(view.state.doc));
+        // REST saves replace the canonical document. Preserve inline authorship
+        // there; the span-free runtime projection would erase it on reload.
+        const persistedMarkdown = serializer(view.state.doc);
+        const markdown = this.normalizeMarkdownForRuntime(persistedMarkdown);
         const shouldPersistContent = shouldKeepalivePersistShareContent({
           keepalive: Boolean(_options?.keepalive),
           persistContent: _options?.persistContent,
@@ -4856,7 +4870,7 @@ class ProofEditorImpl implements ProofEditor {
             collabUnsyncedChanges: this.collabUnsyncedChanges,
             collabPendingLocalUpdates: this.collabPendingLocalUpdates,
           });
-          void shareClient.pushUpdate(markdown, metadata, getCurrentActor(), {
+          void shareClient.pushUpdate(persistedMarkdown, metadata, getCurrentActor(), {
             keepalive: Boolean(_options?.keepalive),
             allowLocalKeepaliveBaseToken,
           });

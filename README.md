@@ -62,20 +62,25 @@ docker compose down --volumes --rmi local
 The image uses Node 22, installs the committed dependency lockfile, builds the
 editor, and runs as the non-root `node` user. No host Node installation is needed.
 
-**Add agent → Copy agent invite link** creates a separate commenter token and
-includes it in the invitation, including when the address bar has no `?token=`.
-The agent can read, comment and propose changes; approval remains with an editor.
+**Add agent → Copy suggestion invite** creates a separate commenter token:
+the agent can read, comment and propose changes for an editor to review.
+**Copy editing invite** creates an editor token, allowing direct edits and
+accepting or rejecting suggestions. Existing invitations keep their permissions.
+Both include the new token even when the address bar has no `?token=`.
 Keep copied invitations private. Each click creates a new access link.
 
 Claude Desktop chat needs a local MCP connector to reach this server. Pasting a
 localhost URL into a cloud chat or remote connector is insufficient. This fork
 includes `scripts/proof-mcp.mjs`, a stdio connector scoped to one document. It
-provides `proof_read`, `proof_presence`, `proof_comment`, `proof_suggest`, and
-`proof_events`; it does not expose direct edits or acceptance tools.
+provides `proof_read`, `proof_presence`, `proof_comment`, `proof_suggest`,
+`proof_events`, `proof_snapshot`, and `proof_edit`. Direct edits require an editor
+token in the connector configuration; a commenter token still cannot edit.
+Use `proof_snapshot` first, then its `mutationBase.token` and block refs with
+`proof_edit`. Tokens from an older snapshot are rejected if content has changed.
 
 To configure it, store a private JSON file in the container at
 `/data/claude-proof.json` (mode 600), with `baseUrl: "http://127.0.0.1:4000"`,
-the document `slug`, a commenter `token` created using
+the document `slug`, a commenter or editor `token` created using
 `POST /api/documents/:slug/access-links`, `agentId: "claude-desktop"`, and
 `name: "Claude"`. Add this server to Claude Desktop's `mcpServers` configuration:
 

@@ -22,6 +22,7 @@ async function run(): Promise<void> {
 
   const db = await import('../../server/db.ts');
   const { applyAgentEditV2 } = await import('../../server/agent-edit-v2.ts');
+  const { stripAllProofSpanTags } = await import('../../server/proof-span-strip.ts');
 
   try {
     const slug = `editv2-${Math.random().toString(36).slice(2, 10)}`;
@@ -70,7 +71,7 @@ async function run(): Promise<void> {
 
     doc = db.getDocumentBySlug(slug)!;
     assert(doc.revision === 4, 'Expected revision to increment after insert_before');
-    assert(doc.markdown.startsWith('Preface paragraph.'), 'Expected preface to be first block');
+    assert(stripAllProofSpanTags(doc.markdown).startsWith('Preface paragraph.'), 'Expected preface to be first block, including when wrapped with authorship');
 
     // delete_block
     result = await applyAgentEditV2(slug, {

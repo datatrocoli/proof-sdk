@@ -79,6 +79,13 @@ If a URL contains `?token=`, treat it as an access token:
 - Preferred: `Authorization: Bearer <token>`
 - Also accepted: `x-share-token: <token>`
 
+Check `agent.auth.role` and `capabilities.canEdit` in `/state`. A suggestion
+invitation grants `commenter` access: comments and pending suggestions only.
+An editing invitation grants `editor` access, including direct edits and review
+decisions. `403 FORBIDDEN` is a permission failure; changing `baseToken` or
+`baseRevision` cannot grant a higher role. Ask the human for **Add agent → Copy
+editing invite** if direct edits are intended. Keep each invitation private.
+
 ## Edit Via Ops (Comments, Suggestions, Rewrite)
 
 Use:
@@ -237,7 +244,7 @@ Discovery:
 
 ## Edit V2 (Block IDs + Revision Locking)
 
-Use v2 for top-level block edits with stable block IDs and revision-based optimistic locking.
+Use v2 for top-level block edits with stable block IDs and an editing precondition from the same snapshot.
 
 ### Get a snapshot
 
@@ -247,7 +254,9 @@ Example:
 
   curl -H "Authorization: Bearer <token>" "http://localhost:4000/documents/<slug>/snapshot"
 
-The response includes `revision` and an ordered `blocks` array with deterministic refs (`b1`, `b2`, ...).
+The response includes `mutationBase.token`, `revision`, an endpoint-specific
+`contract`, and an ordered `blocks` array with deterministic refs (`b1`, `b2`, ...).
+Prefer the snapshot's token as `baseToken` and use refs from that same response.
 
 ### Apply edits
 
@@ -261,7 +270,7 @@ Example:
     -H "Idempotency-Key: <uuid>" \
     -d '{
       "by": "ai:your-agent",
-      "baseRevision": 128,
+      "baseToken": "<mutationBase.token from the snapshot>",
       "operations": [
         { "op": "replace_block", "ref": "b3", "block": { "markdown": "Updated paragraph." } },
         { "op": "insert_after", "ref": "b3", "blocks": [{ "markdown": "## New Section" }] }
@@ -269,7 +278,9 @@ Example:
     }'
 
 On success, the response includes the new `revision`, a `snapshot` payload, and a `collab` status.
-If your `baseRevision` is stale, you'll receive `STALE_REVISION` plus the latest snapshot for retry.
+If your `baseToken` is stale, you'll receive `STALE_BASE`. Fetch a fresh snapshot
+and reconsider the edit against its current blocks before retrying. The revision
+fallback can return `STALE_REVISION`.
 
 v2 convergence fields:
 - `collab.status` remains compatibility status (`confirmed|pending`) and is fragment-authoritative.
@@ -277,8 +288,18 @@ v2 convergence fields:
 - `202` is only expected when fragment convergence is pending.
 
 Precondition contract for v2:
-- `baseRevision` is required.
+- Use `baseToken` from `snapshot.mutationBase.token` (preferred).
+- This local build also accepts a positive `baseRevision` from that snapshot. Send only one precondition.
 - `baseUpdatedAt` is not accepted on `/edit/v2`.
+- `/state.contract.editV2` and `/snapshot.contract` describe this endpoint. The top-level state contract also covers legacy edit/ops routes and must not be used as the V2 contract.
+- Deployments can differ: if the endpoint advertises `token-only`, use `baseToken` exclusively.
+
+`revision: null` means the saved projection is catching up to collaborative
+content; it is not revision zero. The response explains this with
+`revisionUnavailableReason: "projection_syncing"`. A later snapshot can have a
+numeric revision once syncing completes. When `mutationBase.token` is available,
+use that token even if the revision is null. If neither a safe token nor a valid
+revision is available, reread after syncing; never guess a revision.
 
 Idempotency guidance:
 - Send `Idempotency-Key` for mutation requests (`X-Idempotency-Key` is also accepted for compatibility).

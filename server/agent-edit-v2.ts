@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Node as ProseMirrorNode, Schema } from '@milkdown/prose/model';
+import { Transform } from '@milkdown/prose/transform';
 import {
   addDocumentEvent,
   bumpDocumentAccessEpoch,
@@ -39,6 +40,7 @@ import { isHostedRewriteEnvironment } from './rewrite-policy.js';
 import { getActiveCollabClientBreakdown } from './ws.js';
 import { canonicalizeStoredMarks, type StoredMark } from '../src/formats/marks.js';
 import { refreshSnapshotForSlug } from './snapshot.js';
+import { extractAuthoredMarksFromDoc, synchronizeAuthoredMarks } from './proof-authored-mark-sync.js';
 
 export type AgentEditV2Result = {
   status: number;
@@ -382,7 +384,17 @@ async function applyOperations(
   blocks: BlockState[],
   operations: AgentEditV2Operation[],
   nextRevision: number,
+  by: string,
 ): Promise<{ ok: true; blocks: BlockState[] } | { ok: false; code: string; message: string; opIndex: number } > {
+  const authored = parser.schema.marks.proofAuthored.create({ by });
+  // Attribute newly supplied blocks through real inline marks so the shared
+  // editor and durable metadata agree. Existing blocks keep their authorship.
+  const attributeContribution = (node: ProseMirrorNode): ProseMirrorNode => {
+    if (node.isText) return node.mark(authored.addToSet(node.marks));
+    const children: ProseMirrorNode[] = [];
+    node.forEach(child => children.push(attributeContribution(child)));
+    return node.type.create(node.attrs, children, node.marks);
+  };
   for (let opIndex = 0; opIndex < operations.length; opIndex += 1) {
     const op = operations[opIndex];
     if (op.op === 'replace_block') {
@@ -394,7 +406,7 @@ async function applyOperations(
       if ('error' in parsed) {
         return { ok: false, code: 'INVALID_BLOCK_MARKDOWN', message: parsed.error, opIndex };
       }
-      blocks.splice(idx, 1, { id: randomUUID(), createdRevision: nextRevision, node: parsed.node });
+      blocks.splice(idx, 1, { id: randomUUID(), createdRevision: nextRevision, node: attributeContribution(parsed.node) });
       continue;
     }
 
@@ -409,7 +421,7 @@ async function applyOperations(
         if ('error' in parsed) {
           return { ok: false, code: 'INVALID_BLOCK_MARKDOWN', message: parsed.error, opIndex };
         }
-        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: parsed.node });
+        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: attributeContribution(parsed.node) });
       }
       blocks.splice(idx + 1, 0, ...inserts);
       continue;
@@ -426,7 +438,7 @@ async function applyOperations(
         if ('error' in parsed) {
           return { ok: false, code: 'INVALID_BLOCK_MARKDOWN', message: parsed.error, opIndex };
         }
-        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: parsed.node });
+        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: attributeContribution(parsed.node) });
       }
       blocks.splice(idx, 0, ...inserts);
       continue;
@@ -456,7 +468,7 @@ async function applyOperations(
         if ('error' in parsed) {
           return { ok: false, code: 'INVALID_BLOCK_MARKDOWN', message: parsed.error, opIndex };
         }
-        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: parsed.node });
+        inserts.push({ id: randomUUID(), createdRevision: nextRevision, node: attributeContribution(parsed.node) });
       }
       blocks.splice(fromIdx, toIdx - fromIdx + 1, ...inserts);
       continue;
@@ -488,7 +500,42 @@ async function applyOperations(
       if ('error' in parsed) {
         return { ok: false, code: 'INVALID_BLOCK_MARKDOWN', message: parsed.error, opIndex };
       }
-      blocks.splice(idx, 1, { ...current, node: parsed.node });
+      let replacementNode = parsed.node;
+      if (current.node.textContent !== parsed.node.textContent) {
+        const findParsed = await parseSingleBlockMarkdown(parser, op.find);
+        const replacementParsed = op.replace ? await parseSingleBlockMarkdown(parser, op.replace) : null;
+        const findText = 'error' in findParsed ? op.find : findParsed.node.textContent;
+        const replacementText = replacementParsed && !('error' in replacementParsed)
+          ? replacementParsed.node.textContent : op.replace;
+        const oldText = current.node.textContent;
+        let expected = '', cursor = 0;
+        const ranges: Array<{ from: number; to: number }> = [];
+        let index = findText ? oldText.indexOf(findText) : -1;
+        while (index >= 0) {
+          expected += oldText.slice(cursor, index);
+          ranges.push({ from: expected.length, to: expected.length + replacementText.length });
+          expected += replacementText;
+          cursor = index + findText.length;
+          if (op.occurrence !== 'all') break;
+          index = oldText.indexOf(findText, cursor);
+        }
+        expected += oldText.slice(cursor);
+        if (!ranges.length || expected !== parsed.node.textContent) {
+          return { ok: false, code: 'AUTHORSHIP_RANGE_UNRESOLVED', message: 'Cannot attribute this replacement precisely; use replace_block for a whole-block contribution', opIndex };
+        }
+        const tr = new Transform(parser.schema.topNodeType.create(null, [parsed.node]));
+        let offset = 0;
+        parsed.node.descendants((node, pos) => {
+          if (!node.isText) return;
+          for (const range of ranges) {
+            const from = Math.max(offset, range.from), to = Math.min(offset + node.nodeSize, range.to);
+            if (from < to) tr.addMark(pos + 1 + from - offset, pos + 1 + to - offset, authored);
+          }
+          offset += node.nodeSize;
+        });
+        replacementNode = tr.doc.firstChild!;
+      }
+      blocks.splice(idx, 1, { ...current, node: replacementNode });
       continue;
     }
   }
@@ -934,7 +981,7 @@ export async function applyAgentEditV2(
   }
 
   const nextRevision = doc.revision + 1;
-  const applied = await applyOperations(parser, blocks, normalized.operations, nextRevision);
+  const applied = await applyOperations(parser, blocks, normalized.operations, nextRevision, by);
   if (!applied.ok) {
     const snapshot = await buildSnapshot(slug);
     return {
@@ -964,7 +1011,7 @@ export async function applyAgentEditV2(
   }
 
   const nextMarkdown = await serializeMarkdown(nextDoc);
-  const marks = authoritativeMarks;
+  const marks = synchronizeAuthoredMarks(authoritativeMarks, extractAuthoredMarksFromDoc(nextDoc, parser.schema));
   const singleWriterMode = isSingleWriterEditEnabled();
   if (nextMarkdown === authoritativeMarkdown) {
     return finalizeAgentEditV2Response(slug, by, authoritativeMarkdown, marks, doc.revision);

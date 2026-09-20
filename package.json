@@ -12,7 +12,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/finalize-web-build.mjs",
     "serve": "tsx server/index.ts",
-    "test": "npm run test:proof-sdk && npm run test:server-routes-share && npm run test:canonical-history && npm run test:browser-history && npm run test:agent-invite && npm run test:gutter-sync && npm run test:proof-span-strip && npm run test:suggestion-contribution && npm run test:browser-review-session && npm run test:editor-review-feedback",
+    "test": "npm run test:proof-sdk && npm run test:server-routes-share && npm run test:canonical-history && npm run test:browser-history && npm run test:agent-invite && npm run test:gutter-sync && npm run test:proof-span-strip && npm run test:suggestion-contribution && npm run test:browser-review-session && npm run test:editor-review-feedback && npm run test:editor-share-persist",
     "test:editor-review-feedback": "tsx src/tests/editor-review-feedback.test.ts",
     "test:proof-span-strip": "tsx src/tests/proof-span-strip.test.ts",
     "test:browser-review-session": "tsx src/tests/browser-review-session.test.ts",
@@ -23,7 +23,8 @@
     "test:proof-sdk": "tsx src/tests/proof-sdk-agent-bridge-client.test.ts",
     "test:server-routes-share": "tsx src/tests/server-routes-and-share.test.ts",
     "demo:agent": "npm --workspace proof-example run demo:agent",
-    "test:agent-invite": "tsx src/tests/agent-invite-mcp.test.ts"
+    "test:agent-invite": "tsx src/tests/agent-invite-mcp.test.ts",
+    "test:editor-share-persist": "tsx src/tests/editor-share-persist.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.879.0",

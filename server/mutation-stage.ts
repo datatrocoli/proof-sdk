@@ -14,6 +14,17 @@ export function isIdempotencyRequired(stage: MutationContractStage): boolean {
   return stage === 'B' || stage === 'C';
 }
 
+// Edit V2 has a stricter contract than the legacy edit/ops endpoints, even in
+// Stage A. Publish it identically in state and snapshot discovery responses.
+export function buildEditV2Contract() {
+  return {
+    preconditionMode: 'token-or-revision',
+    supportedPreconditions: ['baseToken', 'baseRevision'],
+    preferredPrecondition: 'baseToken',
+    idempotencyRequired: isIdempotencyRequired(getMutationContractStage()),
+  };
+}
+
 export function isRevisionOnlyPrecondition(stage: MutationContractStage): boolean {
   return stage === 'C';
 }

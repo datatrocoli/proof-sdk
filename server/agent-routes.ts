@@ -103,6 +103,7 @@ import {
 } from './rewrite-policy.js';
 import {
   getMutationContractStage,
+  buildEditV2Contract,
   isIdempotencyRequired,
   validateEditPrecondition,
   validateOpPrecondition,
@@ -2011,6 +2012,7 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
     body.revision = revision;
   } else if (!mutationReady) {
     body.revision = null;
+    body.revisionUnavailableReason = 'projection_syncing';
   }
   if (!mutationReady && body.updatedAt === undefined) {
     body.updatedAt = null;
@@ -2024,6 +2026,7 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
       : (mutationStage === 'C' ? 'revision-only' : 'revision-or-updatedAt'),
     supportedPreconditions: ['baseToken', 'baseRevision', 'baseUpdatedAt'],
     preferredPrecondition: mutationBase ? 'baseToken' : (mutationReady ? 'baseRevision' : 'baseUpdatedAt'),
+    editV2: buildEditV2Contract(),
   };
   body.capabilities = {
     ...(isRecord(body.capabilities) ? body.capabilities : {}),

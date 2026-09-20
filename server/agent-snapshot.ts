@@ -16,6 +16,7 @@ import {
 } from './milkdown-headless.js';
 import { stripAllProofSpanTags } from './proof-span-strip.js';
 import { getActiveCollabClientCount } from './ws.js';
+import { buildEditV2Contract } from './mutation-stage.js';
 
 export type AgentSnapshotResult = {
   status: number;
@@ -144,6 +145,8 @@ async function buildSnapshotPayload(
     success: true,
     slug: document.slug,
     revision: mutationReady ? document.revision : null,
+    ...(!mutationReady ? { revisionUnavailableReason: 'projection_syncing' } : {}),
+    contract: buildEditV2Contract(),
     readSource: document.read_source ?? 'projection',
     projectionFresh,
     repairPending,

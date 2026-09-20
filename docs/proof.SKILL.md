@@ -12,6 +12,8 @@ Proof is the hosted product. Proof SDK is the open-source editor, collaboration 
 - Include `by` on every write. Use `ai:<agent-name>`.
 - Treat `slug + token` as the document address and auth pair.
 - Prefer HTTP APIs over local runtime assumptions.
+- Read `agent.auth.role` and `capabilities.canEdit` from state. Commenter invitations allow pending suggestions; direct edits require an editor invitation.
+- For `/edit/v2`, use refs and `mutationBase.token` from the same snapshot. Follow `/snapshot.contract` or `/state.contract.editV2` rather than assuming every deployment has the same preconditions.
 
 ## Authentication
 
@@ -72,7 +74,7 @@ curl -sS -X POST "http://localhost:4000/documents/<slug>/edit/v2" \
   -H "Idempotency-Key: <unique-key>" \
   -d '{
     "by":"ai:codex",
-    "baseRevision":42,
+    "baseToken":"<mutationBase.token from the snapshot>",
     "operations":[
       {"op":"replace_block","ref":"b3","block":{"markdown":"Updated paragraph."}},
       {"op":"insert_after","ref":"b3","blocks":[{"markdown":"## New section"}]}

@@ -14,16 +14,19 @@ process.env.DATABASE_PATH = path.join(dir, 'test.db');
 process.env.PROOF_ENV = 'test';
 process.env.AGENT_EDIT_V2_ENABLED = '1';
 const { apiRoutes } = await import('../../server/routes.js');
+const { agentRoutes } = await import('../../server/agent-routes.js');
 const { mountProofSdkRoutes } = await import('../../packages/doc-server/src/index.js');
 const app = express();
 app.use(express.json());
 app.use('/api', apiRoutes);
+app.use('/api/agent', agentRoutes);
 mountProofSdkRoutes(app);
 const http = createServer(app);
 await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
 const address = http.address() as { port: number };
 const baseUrl = `http://127.0.0.1:${address.port}`;
 const client = new Client({ name: 'new-agent-test', version: '1.0.0' });
+const editingClient = new Client({ name: 'editing-agent-test', version: '1.0.0' });
 try {
   async function post(route: string, body: unknown, token?: string) {
     return fetch(baseUrl + route, {
@@ -53,6 +56,17 @@ try {
   assert.ok(invitation.includes(`Bearer ${link.accessToken}`));
   assert.ok(!invitation.includes('<token-from-doc-url>'));
   assert.ok(invitation.includes('local MCP connector'));
+  assert.ok(invitation.includes('Invitation role: commenter'));
+  assert.ok(invitation.includes('Keep suggestions pending'));
+  const editingLink = await share.createAccessLink('editor');
+  assert.ok(editingLink && !('error' in editingLink));
+  assert.notEqual(editingLink.accessToken, accessToken);
+  assert.notEqual(editingLink.accessToken, link.accessToken);
+  const editingInvitation = buildAgentInvite(editingLink.webShareUrl, 'editor');
+  assert.ok(editingInvitation.includes('Invitation role: editor'));
+  assert.ok(editingInvitation.includes('baseToken'));
+  assert.ok(editingInvitation.includes('proof_edit'));
+  assert.ok(!editingInvitation.includes('Keep suggestions pending'));
 
   // Regression: a plain document URL may have neither a query token nor a
   // cookie. The editable browser page must still be able to invite a reviewer.
@@ -94,7 +108,7 @@ try {
   await client.connect(clientTransport);
   const tools = await client.listTools();
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(),
-    ['proof_comment', 'proof_events', 'proof_presence', 'proof_read', 'proof_suggest']);
+    ['proof_comment', 'proof_edit', 'proof_events', 'proof_presence', 'proof_read', 'proof_snapshot', 'proof_suggest']);
   async function call(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
     assert.ok(!result.isError, `${name} should succeed: ${JSON.stringify(result.content)}`);
@@ -104,6 +118,7 @@ try {
     return JSON.parse(text);
   }
   assert.match((await call('proof_read')).markdown, /Original sentence/);
+  assert.equal((await call('proof_read')).accessRole, 'commenter');
   await call('proof_presence');
   await call('proof_comment', { quote: 'Original sentence.', text: 'A review comment.' });
   await call('proof_suggest', { quote: 'Original sentence.', content: 'Proposed sentence.' });
@@ -166,11 +181,75 @@ try {
     }
   }
   assert.ok(!(await call('proof_read')).markdown.includes('Bypassed review.'));
+  const reviewSnapshot = await call('proof_snapshot');
+  const blockedEdit = await client.callTool({ name: 'proof_edit', arguments: {
+    baseToken: reviewSnapshot.mutationBase.token,
+    operations: [{ op: 'insert_after', ref: reviewSnapshot.blocks[0].ref, blocks: [{ markdown: 'Unauthorized direct edit.' }] }],
+  } });
+  assert.ok(blockedEdit.isError, 'MCP cannot bypass commenter permissions');
+  assert.ok(!JSON.stringify(blockedEdit).includes(config.token));
+
+  const editorConfigPath = path.join(dir, 'editor-mcp.json');
+  writeFileSync(editorConfigPath, JSON.stringify({ ...config, token: editingLink.accessToken, agentId: 'editing-agent-test' }), { mode: 0o600 });
+  await editingClient.connect(new StdioClientTransport({
+    command: process.execPath, args: [path.resolve('scripts/proof-mcp.mjs')],
+    env: { PROOF_MCP_CONFIG: editorConfigPath }, stderr: 'inherit',
+  }));
+  async function editorCall(name: string, args: Record<string, unknown> = {}) {
+    const result = await editingClient.callTool({ name, arguments: args });
+    assert.ok(!result.isError, `Editor ${name} failed: ${JSON.stringify(result.content)}`);
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(!text.includes(editingLink.accessToken));
+    return JSON.parse(text);
+  }
+  const editorState = await editorCall('proof_read');
+  assert.equal(editorState.accessRole, 'editor');
+  assert.equal(editorState.capabilities.canEdit, true);
+  const snapshot = await editorCall('proof_snapshot');
+  assert.equal(snapshot.revision, editorState.revision);
+  assert.deepEqual(snapshot.contract, editorState.contract.editV2);
+  assert.deepEqual(snapshot.contract.supportedPreconditions, ['baseToken', 'baseRevision']);
+  assert.equal(snapshot.contract.preferredPrecondition, 'baseToken');
+  const contribution = 'Direct contribution with agent authorship.';
+  const edit = { baseToken: snapshot.mutationBase.token,
+    operations: [{ op: 'insert_after', ref: snapshot.blocks[0].ref, blocks: [{ markdown: contribution }] }] };
+  const edited = await editorCall('proof_edit', edit);
+  assert.equal(edited.success, true);
+  const directState = await editorCall('proof_read');
+  assert.ok(directState.markdown.includes(contribution));
+  assert.ok(!directState.markdown.includes('Unauthorized direct edit.'));
+  assert.ok(Object.values(directState.marks).some((mark: any) => mark.kind === 'authored'
+    && mark.by === 'ai:editing-agent-test' && mark.quote?.trim() === contribution), `Direct insertion retains exact agent authorship: ${JSON.stringify(directState.marks)}`);
+  assert.ok(!Object.values(directState.marks).some((mark: any) => mark.kind === 'authored'
+    && mark.by === 'ai:editing-agent-test' && mark.quote?.includes('Original sentence.')), 'Direct insertion must not claim the original text');
+  assert.ok(!Object.values(directState.marks).some((mark: any) => mark.content === contribution && mark.status === 'pending'));
+  const staleEdit = await editingClient.callTool({ name: 'proof_edit', arguments: edit });
+  assert.ok(staleEdit.isError && JSON.stringify(staleEdit.content).includes('STALE_BASE'), 'Old snapshot tokens cannot replay edits');
+  assert.equal((await editorCall('proof_read')).markdown.split(contribution).length - 1, 1);
+  const apiState = await (await fetch(`${baseUrl}/api/agent/${slug}/state`, { headers: { 'x-share-token': editingLink.accessToken } })).json();
+  assert.equal(apiState.revision, directState.revision, 'Both state aliases expose the same current revision');
+  const mixed = await (await post('/documents', {
+    markdown: '<span data-proof="authored" data-by="human:Alice">Keep old and old intact.</span>\n',
+  })).json();
+  const mixedSnapshot = await (await fetch(`${baseUrl}/documents/${mixed.slug}/snapshot`, { headers: { 'x-share-token': mixed.accessToken } })).json();
+  const mixedEdit = await post(`/documents/${mixed.slug}/edit/v2`, {
+    baseToken: mixedSnapshot.mutationBase.token, by: 'ai:precise-edit',
+    operations: [{ op: 'find_replace_in_block', ref: 'b1', find: 'old', replace: 'new', occurrence: 'all' }],
+  }, mixed.accessToken);
+  assert.ok(mixedEdit.ok, await mixedEdit.text());
+  const mixedState = await (await fetch(`${baseUrl}/documents/${mixed.slug}/state`, { headers: { 'x-share-token': mixed.accessToken } })).json();
+  assert.equal(mixedState.markdown.trim(), 'Keep new and new intact.');
+  const aiSegments = Object.values(mixedState.marks).filter((m: any) => m.kind === 'authored' && m.by === 'ai:precise-edit') as any[];
+  assert.equal(aiSegments.length, 2);
+  assert.ok(aiSegments.every(m => m.quote === 'new'), 'Find/replace attributes only each inserted word');
+  const humanSegments = Object.values(mixedState.marks).filter((m: any) => m.kind === 'authored' && m.by === 'human:Alice') as any[];
+  assert.ok(humanSegments.some(m => m.quote.includes('Keep')) && humanSegments.some(m => m.quote.includes('intact')), 'Unchanged words retain their original author');
   const events = await call('proof_events');
   assert.ok(events.events.length > 0);
-  console.log('PASS: tokenless-page invitation and fresh MCP agent can read, appear, comment and propose; approval stays with the human');
+  console.log('PASS: suggestion invitations stay restricted; editing invitations and MCP use snapshot tokens for direct writes with agent authorship');
 } finally {
   await client.close();
+  await editingClient.close();
   await new Promise<void>((resolve) => http.close(() => resolve()));
   rmSync(dir, { recursive: true, force: true });
 }
