@@ -1733,10 +1733,29 @@ const EMPTY_AUTHORITATIVE_BASELINE: AuthoritativeBaseline = (() => {
 })();
 
 function buildAuthoritativeBaseline(source: Y.Doc): AuthoritativeBaseline {
+  const authoritative = hasLegacyEphemeralCollabState(source) ? cloneAuthoritativeHistory(source) : source;
   return {
-    snapshot: encodeAuthoritativeStateAsUpdate(source),
-    stateVector: encodeAuthoritativeStateVector(source),
+    snapshot: Y.encodeStateAsUpdate(authoritative),
+    stateVector: Y.encodeStateVector(authoritative),
   };
+}
+
+/** Copy durable content without assigning new identities to existing Yjs items. */
+function cloneAuthoritativeHistory(source: Y.Doc): Y.Doc {
+  const copy = new Y.Doc();
+  Y.applyUpdate(copy, Y.encodeStateAsUpdate(source));
+  // Presence is transient, but rebuilding the document to exclude it invents a
+  // new client ID on every save. Clear only its values in the detached copy.
+  copy.transact(() => {
+    for (const key of ['agentPresence', 'agentCursors']) {
+      if (source.share.has(key)) copy.getMap(key).clear();
+    }
+    if (source.share.has('agentActivity')) {
+      const activity = copy.getArray('agentActivity');
+      if (activity.length > 0) activity.delete(0, activity.length);
+    }
+  });
+  return copy;
 }
 
 function buildComparableAuthoritativeDoc(
@@ -1765,20 +1784,20 @@ function buildAuthoritativeDocFingerprint(source: Y.Doc): string {
 function hasLegacyEphemeralCollabState(ydoc: Y.Doc): boolean {
   const share = (ydoc as { share?: Map<string, SharedYDocEntry> }).share;
   if (!share || share.size === 0) return false;
-  return share.has('agentPresence')
-    || share.has('agentCursors')
-    || share.has('agentActivity');
+  return (sourceMapSize(ydoc, 'agentPresence') > 0)
+    || (sourceMapSize(ydoc, 'agentCursors') > 0)
+    || (share.has('agentActivity') && ydoc.getArray('agentActivity').length > 0);
+}
+
+function sourceMapSize(ydoc: Y.Doc, key: string): number {
+  return ydoc.share.has(key) ? ydoc.getMap(key).size : 0;
 }
 
 function encodeAuthoritativeStateVector(ydoc: Y.Doc): Uint8Array {
-  // Use the original doc's state vector so that delta computation later uses matching
-  // client IDs. cloneAuthoritativeDocState creates a fresh Y.Doc with a new client ID
-  // which causes encodeStateAsUpdate to treat all content as new inserts, leading to
-  // content duplication when the delta is applied on top of existing snapshots.
-  // For docs with legacy ephemeral state, we still need to strip it from the state
-  // vector by cloning, but modern docs should use the original directly.
+  // Preserve existing item IDs so deltas match saved snapshots. If legacy
+  // presence values need clearing, copy the shared history rather than rebuild it.
   return hasLegacyEphemeralCollabState(ydoc)
-    ? Y.encodeStateVector(cloneAuthoritativeDocState(ydoc))
+    ? Y.encodeStateVector(cloneAuthoritativeHistory(ydoc))
     : Y.encodeStateVector(ydoc);
 }
 
@@ -1793,12 +1812,10 @@ function encodeAuthoritativeStateAsUpdate(
   ydoc: Y.Doc,
   stateVector?: Uint8Array,
 ): Uint8Array {
-  // Use the original doc for delta computation to preserve client ID continuity.
-  // Cloning creates a fresh client ID which makes the delta include ALL content
-  // rather than just the diff, causing duplication on reload.
-  // For legacy docs with ephemeral state, still clone to strip it.
+  // Preserve shared history while excluding legacy presence values. Rebuilding
+  // the content with fresh IDs would duplicate it when applied to existing peers.
   if (hasLegacyEphemeralCollabState(ydoc)) {
-    const authoritative = cloneAuthoritativeDocState(ydoc);
+    const authoritative = cloneAuthoritativeHistory(ydoc);
     return stateVector
       ? Y.encodeStateAsUpdate(authoritative, stateVector)
       : Y.encodeStateAsUpdate(authoritative);
@@ -7653,7 +7670,7 @@ async function persistDoc(
         return;
       }
     const priorBaseline = getAuthoritativeBaseline(slug);
-    const authoritativeDoc = buildComparableAuthoritativeDoc(priorBaseline?.snapshot ?? null, ydoc);
+    const authoritativeDoc = cloneAuthoritativeHistory(ydoc);
     if (typeof projectionMarkdownOverride === 'string') {
       syncAuthoritativeMarkdownCache(authoritativeDoc, projectionMarkdownOverride, 'persist-authoritative-sync');
     }
@@ -7866,7 +7883,7 @@ async function persistDoc(
             const latestSnapshot = getLatestYSnapshot(slug);
             const bytesSinceSnapshot = getAccumulatedYUpdateBytesAfter(slug, latestSnapshot?.version ?? 0);
             if (nextUpdateCount >= compactionEvery || bytesSinceSnapshot >= compactionMaxBytes) {
-              const fullSnapshot = Y.encodeStateAsUpdate(cloneAuthoritativeDocState(ydoc));
+              const fullSnapshot = authoritativeSnapshot;
               saveYSnapshot(slug, seq, fullSnapshot);
               pruneObsoleteYHistory(slug, seq);
               nextUpdateCount = 0;

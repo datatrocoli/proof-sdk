@@ -513,6 +513,7 @@ export const heatmapPlugin = $prose((ctx) => {
       let cachedSegments: CachedSegment[] = [];
       let needsRebuild = true;
       let renderRafId: number | null = null;
+      let lastMode = ctx.get(heatmapCtx.key).mode;
 
       // Get or create gutter container
       const gutterEl = document.getElementById('provenance-gutter');
@@ -618,41 +619,10 @@ export const heatmapPlugin = $prose((ctx) => {
       // Initial build
       runRender(true);
 
-      // Scroll polling (desktop: fast transform updates; mobile: direct viewport re-render)
-      let scrollPollId: number | null = null;
-      let lastEditorTop: number | null = null;
-      let lastViewportOffsetTop: number | null = null;
-      let lastViewportHeight: number | null = null;
-
-      const pollScroll = () => {
-        const editorRect = editorView.dom.getBoundingClientRect();
-        const currentTop = editorRect.top;
-        const vv = window.visualViewport;
-        const currentViewportOffsetTop = vv?.offsetTop ?? 0;
-        const currentViewportHeight = vv?.height ?? window.innerHeight;
-
-        if (useDirectViewportRender) {
-          if (
-            lastEditorTop === null
-            || Math.abs(currentTop - lastEditorTop) > 0.5
-            || lastViewportOffsetTop === null
-            || Math.abs(currentViewportOffsetTop - lastViewportOffsetTop) > 0.5
-            || lastViewportHeight === null
-            || Math.abs(currentViewportHeight - lastViewportHeight) > 0.5
-          ) {
-            scheduleRender(true);
-          }
-        } else if (lastEditorTop !== null && Math.abs(currentTop - lastEditorTop) > 0.5) {
-          updateScroll();
-        }
-
-        lastEditorTop = currentTop;
-        lastViewportOffsetTop = currentViewportOffsetTop;
-        lastViewportHeight = currentViewportHeight;
-        scrollPollId = requestAnimationFrame(pollScroll);
-      };
-
-      scrollPollId = requestAnimationFrame(pollScroll);
+      // Scroll events are captured from nested scrollers too. Do not read layout
+      // every animation frame when the document is idle.
+      const onScroll = () => scheduleRender(useDirectViewportRender);
+      window.addEventListener('scroll', onScroll, true);
 
       // Resize / visual viewport handlers
       let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -674,14 +644,24 @@ export const heatmapPlugin = $prose((ctx) => {
         ? new ResizeObserver(() => scheduleRender(true))
         : null;
       resizeObserver?.observe(editorView.dom);
+      const editorContainer = editorView.dom.closest('#editor');
+      if (editorContainer && editorContainer !== editorView.dom) resizeObserver?.observe(editorContainer);
       document.fonts?.addEventListener('loadingdone', onViewportChange);
 
       return {
-        update() {
+        update(view, previousState) {
+          const mode = ctx.get(heatmapCtx.key).mode;
+          // Selection, cursor awareness and save-status updates do not change
+          // authorship or geometry. Avoid re-resolving every mark for them.
+          if (mode === lastMode && view.state.doc === previousState.doc
+            && marksPluginKey.getState(view.state)?.metadata === marksPluginKey.getState(previousState)?.metadata) {
+            return;
+          }
+          lastMode = mode;
           scheduleRender(true);
         },
         destroy() {
-          if (scrollPollId !== null) cancelAnimationFrame(scrollPollId);
+          window.removeEventListener('scroll', onScroll, true);
           if (renderRafId !== null) cancelAnimationFrame(renderRafId);
           if (resizeTimeout !== null) clearTimeout(resizeTimeout);
           window.removeEventListener('resize', onResize);

@@ -18,8 +18,6 @@ export const marksSyncPlugin = (
             const pluginState = marksPluginKey.getState(view.state);
             if (!pluginState) return;
 
-            const allMarks = getMarks(view.state);
-            const actionMarks = allMarks.filter(mark => mark.kind !== 'authored');
             const rawMetadata = pluginState.metadata ?? {};
             const actionMetadata: Record<string, StoredMark> = {};
             for (const [id, entry] of Object.entries(rawMetadata)) {
@@ -35,6 +33,7 @@ export const marksSyncPlugin = (
 
             if (actionMetadataJSON !== lastActionMetadataJSON) {
               lastActionMetadataJSON = actionMetadataJSON;
+              const actionMarks = getMarks(view.state).filter(mark => mark.kind !== 'authored');
               onMarksChange?.(actionMarks, view, actionMetadata);
             }
           }

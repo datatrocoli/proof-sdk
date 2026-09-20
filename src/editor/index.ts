@@ -1222,6 +1222,9 @@ class ProofEditorImpl implements ProofEditor {
       // Allow Backspace to delete empty table rows
       .use(tableKeyboardPlugin)
       .use(marksSyncPlugin((_actionMarks, view) => {
+        // Capture this before deferring: the remote-apply scope ends before the
+        // microtask runs. Otherwise a received mark is published back as local.
+        if (this.suppressMarksSync) return;
         // Finish all editor plugin updates (including Yjs content sync) before
         // publishing marks. Publishing inside view.update can race the fragment.
         queueMicrotask(() => {
@@ -4925,6 +4928,7 @@ class ProofEditorImpl implements ProofEditor {
       && (!this.isShareMode || this.shareAllowLocalEdits);
 
     const applyEditableState = (view: EditorView) => {
+      if (view.editable === isEditable) return;
       view.setProps({
         editable: () => isEditable,
       });
