@@ -138,6 +138,24 @@ try {
     assert.ok(saved.markdown.includes('Saved from browser.'), 'Review preserves newer browser text');
     assert.ok(saved.markdown.includes(action === 'accept' ? 'Accepted sentence.' : 'Original sentence.'));
     assert.ok(!saved.markdown.includes('Rejected sentence.'));
+    // An old/reconnecting client has no in-memory retired-ID cache. Replay its
+    // original metadata AND inline formatting through a real network provider.
+    await waitFor(() => !ydoc.getMap('marks').has(id), 'review reaches stale peer');
+    const replayParagraph = ydoc.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
+    const replayText = replayParagraph.get(0) as Y.XmlText;
+    const beforeReplay = replayText.toString();
+    ydoc.transact(() => {
+      ydoc.getMap('marks').set(id, marks[id]);
+      replayText.format(0, replayText.length, {
+        'proofSuggestion--stale-replay': { ...marks[id], id },
+      });
+    });
+    assert.equal(ydoc.getMap('marks').has(id), true, 'The stale replay was sent');
+    await waitFor(() => !ydoc.getMap('marks').has(id)
+      && !replayText.toDelta().some((delta: any) => delta.attributes?.['proofSuggestion--stale-replay']),
+    'server removes resurrected suggestion metadata and anchors');
+    assert.equal(replayText.toString(), beforeReplay, 'Removing stale review anchors preserves text');
+    await waitFor(() => !db.getDocumentBySlug(slug)?.marks.includes(`\"${id}\"`), 'stale replay stays retired in storage');
     if (action === 'accept') {
       // Restore the fixture through the peer so the next review tests the same quote.
       await waitFor(() => ydoc.getXmlFragment('prosemirror').toString().includes('Accepted sentence.'), 'accept reaches browser');

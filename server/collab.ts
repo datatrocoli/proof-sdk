@@ -91,6 +91,7 @@ import { normalizeAgentScopedId } from '../src/shared/agent-identity.js';
 import { traceServerIncident, toErrorTraceData, type IncidentTraceLevel } from './incident-tracing.js';
 import { getActiveCollabClientBreakdown, type ActiveCollabClientBreakdown } from './ws.js';
 import { analyzeRepeatedStructureDelta, summarizeDocumentIntegrity } from './document-integrity.js';
+import { trackResolvedSuggestionReplay } from './resolved-suggestion-cleanup.js';
 
 warmHeadlessMilkdownParserInBackground();
 
@@ -1909,6 +1910,7 @@ function rememberLoadedDoc(
   docPersistGenerations.set(ydoc, getPersistGeneration(slug));
   ensureFragmentEditTracking(ydoc);
   ensureDurablePersistTracking(slug, ydoc);
+  trackResolvedSuggestionReplay(slug, ydoc);
 }
 
 function ensureFragmentEditTracking(ydoc: Y.Doc): FragmentEditState {
