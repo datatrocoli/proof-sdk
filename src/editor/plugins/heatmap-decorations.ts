@@ -118,10 +118,9 @@ function blockIntersectsMark(blockFrom: number, blockTo: number, mark: ResolvedM
   return mark.to > blockFrom && mark.from < blockTo;
 }
 
-function getAuthoredBlockColor(
+export function getAuthoredBlockColor(
   blockFrom: number,
   blockTo: number,
-  blockTextLength: number,
   marksByKind: Map<MarkKind, ResolvedMarkRange[]>
 ): string | null {
   const authored = marksByKind.get('authored') ?? [];
@@ -143,9 +142,7 @@ function getAuthoredBlockColor(
     }
   }
 
-  const unmarked = Math.max(0, blockTextLength - (human + ai + system));
-  ai += unmarked;
-
+  // Missing provenance is unknown, never evidence of AI authorship.
   if (system > 0) return getMarkColor('system');
   if (human === 0 && ai === 0) return null;
   return ai >= human ? getMarkColor('ai') : getMarkColor('human');
@@ -193,7 +190,6 @@ function getBlockStatus(
  * - Comment (soft gold) - has discussion, overrides authorship
  */
 function getBlockColor(
-  doc: ProseMirrorNode,
   blockFrom: number,
   blockTo: number,
   marksByKind: Map<MarkKind, ResolvedMarkRange[]>
@@ -209,8 +205,7 @@ function getBlockColor(
   }
 
   // Normal status - show authorship color
-  const blockTextLength = doc.textBetween(blockFrom, blockTo, '\n', '\n').length;
-  const authoredColor = getAuthoredBlockColor(blockFrom, blockTo, blockTextLength, marksByKind);
+  const authoredColor = getAuthoredBlockColor(blockFrom, blockTo, marksByKind);
   if (authoredColor) return authoredColor;
 
   return DEFAULT_GUTTER_COLOR;
@@ -306,7 +301,7 @@ function calculateSegments(
   if (mode === 'hidden') return [];
 
   const resolveColor = (from: number, to: number) => (
-    getBlockColor(view.state.doc, from, to, marksByKind)
+    getBlockColor(from, to, marksByKind)
   );
 
   const blocks = collectBlocks(view.state.doc, resolveColor);
@@ -345,7 +340,7 @@ function calculateViewportSegments(
   if (mode === 'hidden') return [];
 
   const resolveColor = (from: number, to: number) => (
-    getBlockColor(view.state.doc, from, to, marksByKind)
+    getBlockColor(from, to, marksByKind)
   );
 
   const blocks = collectBlocks(view.state.doc, resolveColor);
@@ -673,6 +668,13 @@ export const heatmapPlugin = $prose((ctx) => {
       window.addEventListener('resize', onResize);
       window.visualViewport?.addEventListener('resize', onViewportChange);
       window.visualViewport?.addEventListener('scroll', onViewportChange);
+      // Fonts, images and editor width can reflow blocks without a transaction
+      // or window resize. Re-measure the cached gutter positions in that case.
+      const resizeObserver = typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => scheduleRender(true))
+        : null;
+      resizeObserver?.observe(editorView.dom);
+      document.fonts?.addEventListener('loadingdone', onViewportChange);
 
       return {
         update() {
@@ -685,6 +687,8 @@ export const heatmapPlugin = $prose((ctx) => {
           window.removeEventListener('resize', onResize);
           window.visualViewport?.removeEventListener('resize', onViewportChange);
           window.visualViewport?.removeEventListener('scroll', onViewportChange);
+          resizeObserver?.disconnect();
+          document.fonts?.removeEventListener('loadingdone', onViewportChange);
         },
       };
     },

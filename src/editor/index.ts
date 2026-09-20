@@ -1511,6 +1511,8 @@ class ProofEditorImpl implements ProofEditor {
           this.updateShareBannerPresenceDisplay();
         });
         collabClient.onSyncStatus((status) => {
+          const becameSynced = status.connectionStatus === 'connected' && status.isSynced
+            && (this.collabConnectionStatus !== 'connected' || !this.collabIsSynced);
           this.updateCollabHealthWindow(status);
           this.collabConnectionStatus = status.connectionStatus;
           this.collabIsSynced = status.isSynced;
@@ -1520,7 +1522,7 @@ class ProofEditorImpl implements ProofEditor {
           if (status.connectionStatus === 'disconnected' && collabClient.terminalCloseReason === 'permission-denied') {
             void this.refreshCollabSessionAndReconnect(false);
           }
-          if (status.connectionStatus === 'connected' && status.isSynced) {
+          if (becameSynced) {
             if (this.pendingCollabRebindOnSync) {
               const shouldResetDoc = this.pendingCollabRebindResetDoc;
               this.pendingCollabRebindOnSync = false;
@@ -1539,9 +1541,9 @@ class ProofEditorImpl implements ProofEditor {
             this.installShareAgentPresenceObservers();
             this.clearErrorBanner();
             this.resetShareInitRetryState();
-            if (status.unsyncedChanges === 0) {
-              this.flushPendingProjectionMarkdown();
-            }
+          }
+          if (status.connectionStatus === 'connected' && status.isSynced && status.unsyncedChanges === 0) {
+            this.flushPendingProjectionMarkdown();
           }
           this.updateShareBannerSyncDisplay();
         });

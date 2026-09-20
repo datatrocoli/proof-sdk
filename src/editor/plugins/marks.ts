@@ -909,6 +909,10 @@ function finalizeMarkTransaction(
   if (!options?.skipDocStamp) {
     tr = stampSuggestionMetadataOnDocument(view.state, tr, normalized);
   }
+  if (options?.isRemote && tr.doc.eq(view.state.doc)
+    && JSON.stringify(normalized) === JSON.stringify(marksPluginKey.getState(view.state)?.metadata ?? {})) {
+    return;
+  }
   tr = tr.setMeta(marksPluginKey, { type: 'SET_METADATA', metadata: normalized });
   if (options?.isRemote) {
     tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true });
@@ -1684,7 +1688,10 @@ export function applyRemoteMarks(
   // but preserve the local resolved state to prevent stale server data from
   // flipping resolved comments back to unresolved.
   // For tombstoned suggestion marks, skip entirely (accepted/rejected locally).
-  const merged = canonicalizeStoredMarks({ ...getMarkMetadata(view.state) });
+  const merged = canonicalizeStoredMarks({
+    ...marksPluginKey.getState(view.state)?.metadata,
+    ...getMarkMetadata(view.state),
+  });
   const filteredEntries: [string, StoredMark][] = [];
   for (const [id, stored] of allEntries) {
     const status = stored?.status;
@@ -1764,7 +1771,17 @@ export function applyRemoteMarks(
       if (markTypeName === 'suggestion') {
         attrs.kind = stored.kind;
       }
-      tr = tr.addMark(range.from, range.to, markType.create(attrs));
+      if (isAuthored) {
+        // The collaborative document already carries live authorship. Stale
+        // quote-based metadata must never replace it (or keep swapping IDs for
+        // overlapping quotes). Only backfill text with no recorded author.
+        tr.doc.nodesBetween(range.from, range.to, (node, pos) => {
+          if (!node.isText || markType.isInSet(node.marks)) return;
+          tr = tr.addMark(Math.max(pos, range.from), Math.min(pos + node.nodeSize, range.to), markType.create(attrs));
+        });
+      } else {
+        tr = tr.addMark(range.from, range.to, markType.create(attrs));
+      }
       clearMarkAnchorHydrationFailure(id);
       if (shouldReportMarkAnchorResolution(stored.kind)) {
         reportMarkAnchorResolution('success');

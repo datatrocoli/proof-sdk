@@ -179,6 +179,7 @@ export class CollabClient {
   private marksHandler: MarksHandler | null = null;
   private presenceHandler: PresenceHandler | null = null;
   private syncStatusHandler: SyncStatusHandler | null = null;
+  private syncStatusQueued = false;
   private documentUpdatedHandler: DocumentUpdatedHandler | null = null;
   private applyingLocalMarks = false;
   private hasSynced = false;
@@ -230,13 +231,19 @@ export class CollabClient {
   }
 
   private emitSyncStatus(): void {
-    if (!this.syncStatusHandler) return;
-    this.syncStatusHandler({
-      connectionStatus: this.connectionStatus,
-      isSynced: this.hasSynced,
-      unsyncedChanges: this.unsyncedChanges,
-      pendingLocalUpdates: this.durablePendingUpdates.length,
-      offlineSinceMs: this.connectionStatus === 'disconnected' ? this.lastDisconnectAt : null,
+    if (!this.syncStatusHandler || this.syncStatusQueued) return;
+    // Yjs emits updates during transaction cleanup. Editor hydration from a
+    // synchronous listener can start another transaction before cleanup ends.
+    this.syncStatusQueued = true;
+    queueMicrotask(() => {
+      this.syncStatusQueued = false;
+      this.syncStatusHandler?.({
+        connectionStatus: this.connectionStatus,
+        isSynced: this.hasSynced,
+        unsyncedChanges: this.unsyncedChanges,
+        pendingLocalUpdates: this.durablePendingUpdates.length,
+        offlineSinceMs: this.connectionStatus === 'disconnected' ? this.lastDisconnectAt : null,
+      });
     });
   }
 
