@@ -58,11 +58,18 @@ export function resolveDocumentOpRoute(
   }
 }
 
+export function suggestionRequiresApproval(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null
+    && typeof (payload as Record<string, unknown>).status === 'string'
+    && ((payload as Record<string, unknown>).status as string).trim().toLowerCase() === 'accepted';
+}
+
 export function authorizeDocumentOp(
   type: DocumentOpType,
   accessRole: ShareRole | null,
   ownerAuthorized: boolean,
   shareState: string,
+  payload?: unknown,
 ): string | null {
   if (shareState === 'DELETED') return 'Document deleted';
   if (shareState === 'REVOKED' && !ownerAuthorized) return 'Document access has been revoked';
@@ -72,6 +79,9 @@ export function authorizeDocumentOp(
 
   const isEditor = accessRole === 'editor';
   const isCommenter = accessRole === 'commenter';
+  if (type === 'suggestion.add' && suggestionRequiresApproval(payload) && !isEditor) {
+    return 'Insufficient role to create an accepted suggestion';
+  }
   switch (type) {
     case 'comment.add':
     case 'comment.reply':

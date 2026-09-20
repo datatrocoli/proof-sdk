@@ -123,10 +123,12 @@ async function main(): Promise<void> {
   app.use(discoveryRoutes);
   app.use('/api', enforceApiClientCompatibility, apiRoutes);
   app.use('/api/agent', agentRoutes);
-  app.use(apiRoutes);
+  app.post('/documents', apiRoutes);
   app.use('/d', createBridgeMountRouter(enforceBridgeClientCompatibility));
   app.use('/documents', createBridgeMountRouter(enforceBridgeClientCompatibility));
   app.use('/documents', agentRoutes);
+  // Canonical agent routes must precede the legacy /documents/:slug/ops handler.
+  app.use(apiRoutes);
   app.use(shareWebRoutes);
 
   setupWebSocket(wss);

@@ -145,6 +145,7 @@ import { syncAgentSessions } from '../analytics/agent-sessions';
 import { initThemePicker, getThemePicker } from '../ui/theme-picker';
 import { fileClient } from '../bridge/file-client';
 import { shareClient, type CollabSessionInfo, type SharePendingEvent } from '../bridge/share-client';
+import { buildAgentInvite } from '../bridge/agent-invite';
 import { collabClient, type CollabSyncStatus } from '../bridge/collab-client';
 import { shouldDeferShareMarksRefresh } from './share-marks-refresh';
 import { collabCursorBuilder, collabSelectionBuilder } from './plugins/collab-cursors';
@@ -3898,13 +3899,51 @@ class ProofEditorImpl implements ProofEditor {
     }
   }
 
-  private copyWithPromptFallback(text: string, promptLabel = 'Copy link:'): boolean {
-    try {
-      window.prompt(promptLabel, text);
-      return true;
-    } catch {
-      return false;
-    }
+  private copyWithPromptFallback(text: string, promptLabel = 'Copy link:'): Promise<boolean> {
+    // Browser clipboard restrictions must still leave the invitation accessible.
+    // Embedded browsers can reject window.prompt entirely.
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.setAttribute('aria-label', promptLabel);
+      dialog.style.cssText = 'width:min(600px,calc(100vw - 48px));padding:24px;border:1px solid #d1d5db;border-radius:16px;background:#fff;color:#111827;font:14px system-ui;box-shadow:0 16px 48px #0003;';
+      const title = document.createElement('h2');
+      title.textContent = promptLabel;
+      title.style.cssText = 'margin:0 0 12px;font-size:18px';
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.readOnly = true;
+      field.setAttribute('aria-label', 'Invitation or link to copy');
+      field.style.cssText = 'box-sizing:border-box;width:100%;min-height:180px;padding:12px;font:13px monospace;';
+      const status = document.createElement('p');
+      status.setAttribute('role', 'status');
+      status.textContent = 'Copy the text below, then paste it into your agent.';
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;justify-content:flex-end;gap:12px';
+      const close = document.createElement('button');
+      close.textContent = 'Close';
+      const copy = document.createElement('button');
+      copy.textContent = 'Copy';
+      for (const button of [close, copy]) {
+        button.type = 'button';
+        button.style.cssText = 'padding:10px 18px;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;';
+      }
+      const finish = (copied: boolean) => { dialog.remove(); resolve(copied); };
+      close.onclick = () => finish(false);
+      dialog.addEventListener('cancel', () => finish(false));
+      copy.onclick = async () => {
+        if (await this.copyTextToClipboard(text)) finish(true);
+        else {
+          field.focus();
+          field.select();
+          status.textContent = 'Automatic copying is blocked. Press Command+C (Mac) or Ctrl+C to copy the selected text.';
+        }
+      };
+      actions.append(close, copy);
+      dialog.append(title, status, field, actions);
+      document.body.appendChild(dialog);
+      try { dialog.showModal(); field.focus(); field.select(); }
+      catch { finish(false); }
+    });
   }
 
   private triggerHaptic(pattern: 'light' | 'medium' | 'success' | 'selection' = 'light'): void {
@@ -3917,93 +3956,28 @@ class ProofEditorImpl implements ProofEditor {
       this.triggerHaptic('success');
       return true;
     }
-    const prompted = this.copyWithPromptFallback(url);
+    const prompted = await this.copyWithPromptFallback(url);
     if (prompted) this.triggerHaptic('medium');
     return prompted;
-  }
-
-  private extractShareSlugFromUrl(shareUrl: string): string | null {
-    try {
-      const url = new URL(shareUrl);
-      const match = url.pathname.match(/\/d\/([^/?#]+)/);
-      if (!match?.[1]) return null;
-      return decodeURIComponent(match[1]);
-    } catch {
-      return null;
-    }
-  }
-
-  private extractShareTokenFromUrl(shareUrl: string): string | null {
-    try {
-      const url = new URL(shareUrl);
-      const token = url.searchParams.get('token');
-      if (!token || !token.trim()) return null;
-      return token.trim();
-    } catch {
-      return null;
-    }
-  }
-
-  private getAgentInviteMessage(): string {
-    const shareUrl = this.getCanonicalShareUrl();
-    const slug = shareClient.getSlug() || this.extractShareSlugFromUrl(shareUrl);
-    const token = this.extractShareTokenFromUrl(shareUrl);
-    const origin = (() => {
-      try {
-        return new URL(shareUrl).origin;
-      } catch {
-        return window.location.origin;
-      }
-    })();
-
-    if (!slug) {
-      return [
-        'Collaborate with me on this Proof doc.',
-        '',
-        `Doc: ${shareUrl}`,
-      ].join('\n');
-    }
-
-    const encodedSlug = encodeURIComponent(slug);
-    const presenceUrl = `${origin}/api/agent/${encodedSlug}/presence`;
-    const stateUrl = `${origin}/api/agent/${encodedSlug}/state`;
-    const opsUrl = `${origin}/api/agent/${encodedSlug}/ops`;
-    const editUrl = `${origin}/api/agent/${encodedSlug}/edit`;
-
-    return [
-      'Collaborate with me on this Proof doc.',
-      '',
-      `Doc: ${shareUrl}`,
-      '',
-      'Auth for each API request:',
-      `- x-share-token: ${token || '<token-from-doc-url>'}`,
-      '- X-Agent-Id: <your-agent-id>',
-      '- (Use the token from the Doc URL query param: ?token=...)',
-      '',
-      'Start here:',
-      '1) Read current document state with your identity header:',
-      `   GET ${stateUrl}`,
-      '   header: X-Agent-Id: <your-agent-id>',
-      '2) Optionally set your friendly name in presence:',
-      `   POST ${presenceUrl}`,
-      '   body: {"agentId":"<your-agent-id>","name":"<your-name>","status":"active"}',
-      '3) If edits/comments are useful based on state, apply them with:',
-      `   POST ${opsUrl}`,
-      `   or POST ${editUrl}`,
-      '4) Then reply briefly with what you changed or suggest next steps.',
-    ].join('\n');
   }
 
   private async copyAgentInviteWithFallback(): Promise<boolean> {
-    const message = this.getAgentInviteMessage();
-    const copied = await this.copyTextToClipboard(message);
-    if (copied) {
-      this.triggerHaptic('success');
-      return true;
+    try {
+      // The address bar may omit the token when browser access uses a cookie.
+      // Mint a separate review credential instead of copying an unusable URL
+      // or forwarding the owner's credential to another agent.
+      const link = await shareClient.createAccessLink('commenter');
+      if (!link || 'error' in link) return false;
+      const message = buildAgentInvite(link.webShareUrl);
+      const copied = await this.copyTextToClipboard(message);
+      if (copied) {
+        this.triggerHaptic('success');
+        return true;
+      }
+      return this.copyWithPromptFallback(message, 'Copy agent invite:');
+    } catch {
+      return false;
     }
-    const prompted = this.copyWithPromptFallback(message, 'Copy agent invite:');
-    if (prompted) this.triggerHaptic('medium');
-    return prompted;
   }
 
   private showShareWelcomeToastOnce(capabilities?: { canComment: boolean; canEdit: boolean } | null): void {
@@ -4502,7 +4476,7 @@ class ProofEditorImpl implements ProofEditor {
         header.textContent = 'Add an agent';
         header.style.cssText = 'padding:8px 12px 4px;color:#fff;font-size:13px;font-weight:700;';
         const body = document.createElement('div');
-        body.textContent = 'Invite an agent collaborator to edit, suggest, and review this doc.';
+        body.textContent = 'Invite an agent to comment and suggest changes for your review.';
         body.style.cssText = 'padding:0 12px 8px;color:rgba(255,255,255,0.78);font-size:12px;line-height:1.35;';
         menu.append(header, body);
         addMenuButton('Copy agent invite link', async () => this.copyAgentInviteWithFallback(), {
@@ -4630,10 +4604,11 @@ class ProofEditorImpl implements ProofEditor {
         textarea.setAttribute('readonly', 'true');
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
+        (document.querySelector('dialog[open]') ?? document.body).appendChild(textarea);
+        textarea.focus();
         textarea.select();
         const copied = document.execCommand('copy');
-        document.body.removeChild(textarea);
+        textarea.remove();
         return copied;
       } catch {
         return false;

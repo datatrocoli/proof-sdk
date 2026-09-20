@@ -254,9 +254,10 @@ async function withEphemeralApiServer(run: (baseUrl: string) => Promise<void>): 
   app.use(discoveryRoutes);
   app.use('/api', enforceApiClientCompatibility, apiRoutes);
   app.use('/api/agent', agentRoutes);
-  app.use(apiRoutes);
+  app.post('/documents', apiRoutes);
   app.use('/documents', createBridgeMountRouter());
   app.use('/documents', agentRoutes);
+  app.use(apiRoutes);
   app.use(shareWebRoutes);
 
   const server = createServer(app);

@@ -62,6 +62,39 @@ docker compose down --volumes --rmi local
 The image uses Node 22, installs the committed dependency lockfile, builds the
 editor, and runs as the non-root `node` user. No host Node installation is needed.
 
+**Add agent → Copy agent invite link** creates a separate commenter token and
+includes it in the invitation, including when the address bar has no `?token=`.
+The agent can read, comment and propose changes; approval remains with an editor.
+Keep copied invitations private. Each click creates a new access link.
+
+Claude Desktop chat needs a local MCP connector to reach this server. Pasting a
+localhost URL into a cloud chat or remote connector is insufficient. This fork
+includes `scripts/proof-mcp.mjs`, a stdio connector scoped to one document. It
+provides `proof_read`, `proof_presence`, `proof_comment`, `proof_suggest`, and
+`proof_events`; it does not expose direct edits or acceptance tools.
+
+To configure it, store a private JSON file in the container at
+`/data/claude-proof.json` (mode 600), with `baseUrl: "http://127.0.0.1:4000"`,
+the document `slug`, a commenter `token` created using
+`POST /api/documents/:slug/access-links`, `agentId: "claude-desktop"`, and
+`name: "Claude"`. Add this server to Claude Desktop's `mcpServers` configuration:
+
+```json
+{
+  "proof-local": {
+    "command": "/usr/local/bin/docker",
+    "args": ["exec", "-i", "proof-local-proof-1", "node", "/app/scripts/proof-mcp.mjs"]
+  }
+}
+```
+
+Use the actual absolute Docker path on your machine, then restart Claude Desktop
+and enable the connector in the conversation. Docker and the Proof container must
+be running. Ask Claude to call `proof_read`, announce presence, then leave a
+pending suggestion. Remove the `proof-local` entry to disconnect Claude; revoke
+its token separately if access needs to be revoked. The credential file lives in
+the Docker data volume and is never committed to the repository.
+
 Agent suggestions are submitted with `suggestion.add` through the document ops
 API. Click the marked text in the editor to open **Accept / Reject** controls.
 Editors can turn on **Suggesting** in the toolbar to propose tracked text changes.

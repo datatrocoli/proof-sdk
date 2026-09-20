@@ -26,9 +26,10 @@ export function createCollabRuntime() {
 }
 
 export function mountProofSdkRoutes(app: Express): void {
-  app.use(apiRoutes);
+  app.post('/documents', apiRoutes);
   app.use('/documents', createBridgeMountRouter());
   app.use('/documents', agentRoutes);
+  app.use(apiRoutes);
   app.use(shareWebRoutes);
 }
 

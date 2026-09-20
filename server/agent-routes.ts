@@ -64,6 +64,7 @@ import { broadcastToRoom, getActiveCollabClientBreakdown, getActiveCollabClientC
 import { getCookie, shareTokenCookieName } from './cookies.js';
 import {
   authorizeDocumentOp,
+  suggestionRequiresApproval,
   type DocumentOpType,
   parseDocumentOpRequest,
   resolveDocumentOpRoute,
@@ -3170,7 +3171,7 @@ agentRoutes.post('/:slug/ops', async (req: Request, res: Response) => {
   const secret = getPresentedSecret(req, slug);
   const role = secret ? resolveDocumentAccessRole(slug, secret) : null;
   const effectiveShareState = getEffectiveShareStateForRole(doc, role, Boolean(secret && role));
-  const denied = authorizeDocumentOp(op, role, role === 'owner_bot', effectiveShareState);
+  const denied = authorizeDocumentOp(op, role, role === 'owner_bot', effectiveShareState, payload);
   if (denied) {
     const status = denied.includes('revoked') ? 403 : denied.includes('deleted') ? 410 : 403;
     traceServerIncident({
@@ -3422,7 +3423,8 @@ agentRoutes.post('/:slug/marks/suggest-replace', async (req: Request, res: Respo
     sendMutationResponse(res, 400, { success: false, error: 'Invalid slug' }, { route: mutationRoute });
     return;
   }
-  if (!checkAuth(req, res, slug, ['commenter', 'editor', 'owner_bot'])) return;
+  if (!checkAuth(req, res, slug, suggestionRequiresApproval(req.body)
+    ? ['editor', 'owner_bot'] : ['commenter', 'editor', 'owner_bot'])) return;
   const routeKey = mutationRoute;
   const replay = await maybeReplayIdempotentMutation(req, res, slug, mutationRoute, routeKey);
   if (replay.handled) return;
@@ -3444,7 +3446,8 @@ agentRoutes.post('/:slug/marks/suggest-insert', async (req: Request, res: Respon
     sendMutationResponse(res, 400, { success: false, error: 'Invalid slug' }, { route: mutationRoute });
     return;
   }
-  if (!checkAuth(req, res, slug, ['commenter', 'editor', 'owner_bot'])) return;
+  if (!checkAuth(req, res, slug, suggestionRequiresApproval(req.body)
+    ? ['editor', 'owner_bot'] : ['commenter', 'editor', 'owner_bot'])) return;
   const routeKey = mutationRoute;
   const replay = await maybeReplayIdempotentMutation(req, res, slug, mutationRoute, routeKey);
   if (replay.handled) return;
@@ -3466,7 +3469,8 @@ agentRoutes.post('/:slug/marks/suggest-delete', async (req: Request, res: Respon
     sendMutationResponse(res, 400, { success: false, error: 'Invalid slug' }, { route: mutationRoute });
     return;
   }
-  if (!checkAuth(req, res, slug, ['commenter', 'editor', 'owner_bot'])) return;
+  if (!checkAuth(req, res, slug, suggestionRequiresApproval(req.body)
+    ? ['editor', 'owner_bot'] : ['commenter', 'editor', 'owner_bot'])) return;
   const routeKey = mutationRoute;
   const replay = await maybeReplayIdempotentMutation(req, res, slug, mutationRoute, routeKey);
   if (replay.handled) return;

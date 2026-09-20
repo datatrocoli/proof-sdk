@@ -1614,7 +1614,7 @@ apiRoutes.post('/documents/:slug/ops', opsRateLimiter, async (req: Request, res:
 
   const accessRole = getAccessRole(req, slug);
   const ownerAuthorized = canOwnerMutate(req, doc);
-  const denied = authorizeDocumentOp(op, accessRole, ownerAuthorized, doc.share_state);
+  const denied = authorizeDocumentOp(op, accessRole, ownerAuthorized, doc.share_state, payload);
   if (denied) {
     const status = denied.includes('revoked') ? 403 : denied.includes('deleted') ? 410 : 403;
     sendMutationResponse(res, status, { success: false, error: denied }, { route: mutationRoute, slug });
