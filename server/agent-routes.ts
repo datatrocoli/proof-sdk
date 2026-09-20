@@ -853,7 +853,7 @@ function checkAuth(
     return null;
   }
 
-  if (!hasRole(role, allowedRoles)) {
+  if (!role) {
     res.status(401).json({
       success: false,
       error: 'Missing or invalid share token',
@@ -863,6 +863,19 @@ function checkAuth(
         'x-bridge-token: <OWNER_SECRET>',
         'Authorization: Bearer <TOKEN>',
       ],
+    });
+    return null;
+  }
+  if (!hasRole(role, allowedRoles)) {
+    res.status(403).json({
+      success: false,
+      error: 'This token is valid but does not have permission for this operation',
+      code: 'FORBIDDEN',
+      role,
+      requiredRoles: allowedRoles,
+      ...(role === 'commenter' && allowedRoles.includes('editor') ? {
+        hint: 'This invitation permits comments and pending suggestions. Leave suggestions pending for the document editor to review.',
+      } : {}),
     });
     return null;
   }
@@ -1992,6 +2005,8 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
     ? (typeof body.revision === 'number' ? body.revision : doc?.revision)
     : null;
   const editV2Enabled = isFeatureEnabled(process.env.AGENT_EDIT_V2_ENABLED);
+  const canEdit = hasRole(role, ['editor', 'owner_bot']);
+  const canComment = hasRole(role, ['commenter', 'editor', 'owner_bot']);
   if (typeof revision === 'number') {
     body.revision = revision;
   } else if (!mutationReady) {
@@ -2012,9 +2027,13 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
   };
   body.capabilities = {
     ...(isRecord(body.capabilities) ? body.capabilities : {}),
+    canComment,
+    canSuggest: canComment,
+    canEdit,
+    canReview: canEdit,
     snapshotV2: editV2Enabled,
-    editV2: editV2Enabled && (mutationReady || authoritativeMutations),
-    topLevelOnly: editV2Enabled && (mutationReady || authoritativeMutations),
+    editV2: canEdit && editV2Enabled && (mutationReady || authoritativeMutations),
+    topLevelOnly: canEdit && editV2Enabled && (mutationReady || authoritativeMutations),
     mutationReady,
     authoritativeMutations,
   };
@@ -2028,13 +2047,15 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
     docs: AGENT_DOCS_PATH,
   };
   if (mutationReady || authoritativeMutations) {
-    links.ops = { method: 'POST', href: `/api/agent/${slug}/ops` };
+    if (canComment) links.ops = { method: 'POST', href: `/api/agent/${slug}/ops` };
+  }
+  if (canEdit && (mutationReady || authoritativeMutations)) {
     links.edit = { method: 'POST', href: `/api/agent/${slug}/edit` };
     links.title = { method: 'PUT', href: `/api/documents/${slug}/title` };
   }
   if (editV2Enabled) {
     links.snapshot = `/api/agent/${slug}/snapshot`;
-    if (mutationReady || authoritativeMutations) {
+    if (canEdit && (mutationReady || authoritativeMutations)) {
       links.editV2 = { method: 'POST', href: `/api/agent/${slug}/edit/v2` };
     } else {
       delete links.editV2;
@@ -2060,6 +2081,7 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
     mutationReady,
     authoritativeMutations,
     auth: {
+      role,
       tokenSource: typeof req.query.token === 'string' && req.query.token.trim()
         ? 'query:token'
         : (typeof req.header('authorization') === 'string'
@@ -2073,13 +2095,15 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
     mutationContract: body.contract,
   };
   if (mutationReady || authoritativeMutations) {
-    agent.opsApi = `/api/agent/${slug}/ops`;
+    if (canComment) agent.opsApi = `/api/agent/${slug}/ops`;
+  }
+  if (canEdit && (mutationReady || authoritativeMutations)) {
     agent.editApi = `/api/agent/${slug}/edit`;
     agent.titleApi = `/api/documents/${slug}/title`;
   }
   if (editV2Enabled) {
     agent.snapshotApi = `/api/agent/${slug}/snapshot`;
-    if (mutationReady || authoritativeMutations) {
+    if (canEdit && (mutationReady || authoritativeMutations)) {
       agent.editV2Api = `/api/agent/${slug}/edit/v2`;
     }
   }
@@ -2136,7 +2160,7 @@ agentRoutes.get('/:slug/state', async (req: Request, res: Response) => {
       yjsSource: isRecord(body.warning) && (body.warning.yjsSource === 'live' || body.warning.yjsSource === 'persisted')
         ? body.warning.yjsSource
         : null,
-      canWrite: authoritativeMutations || mutationReady,
+      canWrite: canEdit && (authoritativeMutations || mutationReady),
       sessionDowngraded: false,
     });
   }

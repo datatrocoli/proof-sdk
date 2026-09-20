@@ -12,6 +12,7 @@ import { createProofMcp } from '../../scripts/proof-mcp.mjs';
 const dir = mkdtempSync(path.join(os.tmpdir(), 'proof-invite-'));
 process.env.DATABASE_PATH = path.join(dir, 'test.db');
 process.env.PROOF_ENV = 'test';
+process.env.AGENT_EDIT_V2_ENABLED = '1';
 const { apiRoutes } = await import('../../server/routes.js');
 const { mountProofSdkRoutes } = await import('../../packages/doc-server/src/index.js');
 const app = express();
@@ -122,9 +123,47 @@ try {
   for (const route of [`/documents/${slug}/ops`, `/api/documents/${slug}/ops`,
     `/documents/${slug}/marks/suggest-replace`]) {
     const response = await post(route, acceptedPayload, config.token);
-    // The direct mark endpoint's existing checkAuth uses 401 for a disallowed role.
-    assert.equal(response.status, route.includes('/marks/') ? 401 : 403,
+    assert.equal(response.status, 403,
       `Review access must reject immediately accepted suggestions at ${route}`);
+  }
+  for (const [role, token] of [['commenter', config.token], ['viewer', viewer.accessToken], ['editor', accessToken]]) {
+    const state = await (await fetch(`${baseUrl}/documents/${slug}/state`, {
+      headers: { 'x-share-token': token },
+    })).json();
+    const canEdit = role === 'editor';
+    assert.equal(state.agent.auth.role, role);
+    assert.equal(state.capabilities.canEdit, canEdit);
+    assert.equal(state.capabilities.canReview, canEdit);
+    assert.equal(state.capabilities.canSuggest, role !== 'viewer');
+    assert.equal(state.capabilities.editV2, canEdit, 'State must not advertise direct editing to a review-only token');
+    for (const name of ['edit', 'editV2', 'title']) {
+      assert.equal(Boolean(state._links[name]), canEdit);
+      assert.equal(Boolean(state.agent[name + 'Api']), canEdit);
+    }
+    assert.equal(Boolean(state._links.ops), role !== 'viewer');
+    assert.ok(state._links.snapshot, 'Read-only roles retain snapshot access');
+    for (const route of ['edit', 'edit/v2']) {
+      // Empty operations are intentionally invalid: this probes authorization
+      // without ever changing the test document through a direct-write path.
+      const response = await post(`/documents/${slug}/${route}`, {}, token);
+      const body = await response.json();
+      if (canEdit) {
+        assert.ok(response.status !== 401 && response.status !== 403);
+      } else {
+        assert.equal(response.status, 403);
+        assert.equal(body.code, 'FORBIDDEN');
+        assert.equal(body.role, role);
+        assert.deepEqual(body.requiredRoles, ['editor', 'owner_bot']);
+        assert.equal(body.acceptedHeaders, undefined, 'A role denial must not imply that another credential header is required');
+      }
+    }
+  }
+  for (const token of [undefined, 'invalid-token']) {
+    for (const route of ['edit', 'edit/v2']) {
+      const response = await post(`/documents/${slug}/${route}`, {}, token);
+      assert.equal(response.status, 401, 'Missing/invalid credentials remain authentication failures');
+      assert.equal((await response.json()).code, 'UNAUTHORIZED');
+    }
   }
   assert.ok(!(await call('proof_read')).markdown.includes('Bypassed review.'));
   const events = await call('proof_events');
