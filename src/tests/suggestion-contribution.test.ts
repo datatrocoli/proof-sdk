@@ -111,6 +111,13 @@ try {
     lost: { kind: 'insert', by: 'human:Test', status: 'pending', quote: 'Missing contribution.', content: 'Missing contribution.' },
   }, markId: 'lost', action: 'accept' });
   assert.equal(missingTarget.ok, false, 'Review still refuses a target that cannot be located');
+  const retryFixture = { markdown: 'Retry this.', marks: {
+    speculative: { kind: 'replace' as const, by: 'ai:Reviewer', status: 'pending' as const, quote: 'Retry this.', content: 'Retried.' },
+  }, markId: 'speculative', action: 'accept' as const };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.ok((await finalizeSuggestionThroughRehydration(retryFixture)).ok,
+      'A speculative review that has not committed must not poison the next attempt via browser-local caches');
+  }
 
   // An agent can propose a replacement over a still-pending human contribution.
   // Review elsewhere must work too, without losing either overlapping proposal.

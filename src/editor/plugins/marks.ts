@@ -1687,10 +1687,11 @@ export function setMarkMetadata(view: EditorView, metadata: Record<string, Store
 export function applyRemoteMarks(
   view: EditorView,
   metadata: Record<string, StoredMark>,
-  options?: { hydrateAnchors?: boolean }
+  options?: { hydrateAnchors?: boolean; useLocalCaches?: boolean }
 ): void {
   const canonicalMetadata = canonicalizeStoredMarks(metadata);
   const hydrateAnchors = options?.hydrateAnchors !== false;
+  const useLocalCaches = options?.useLocalCaches !== false;
   const existingIds = getProofAnchorIds(view.state.doc);
   let tr = view.state.tr;
   const now = Date.now();
@@ -1720,8 +1721,8 @@ export function applyRemoteMarks(
       delete merged[id];
       continue;
     }
-    const isDeletedTombstone = isResolvedMarkTombstoned(id, now, 'deleted');
-    const isResolvedTombstone = isResolvedMarkTombstoned(id, now, 'resolved');
+    const isDeletedTombstone = useLocalCaches && isResolvedMarkTombstoned(id, now, 'deleted');
+    const isResolvedTombstone = useLocalCaches && isResolvedMarkTombstoned(id, now, 'resolved');
     if (isDeletedTombstone) {
       // Skip deleted marks entirely (no metadata merge, no anchors)
       continue;
@@ -1755,7 +1756,7 @@ export function applyRemoteMarks(
         authoredHydrationSuppressed += 1;
         continue;
       }
-      if (!shouldAttemptMarkAnchorHydration(id, tr.doc, now)) continue;
+      if (useLocalCaches && !shouldAttemptMarkAnchorHydration(id, tr.doc, now)) continue;
 
       const range = resolveStoredMarkRange(tr.doc, stored);
       if (!range) {

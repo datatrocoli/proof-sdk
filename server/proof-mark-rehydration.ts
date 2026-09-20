@@ -286,7 +286,9 @@ async function buildRehydratedState(markdown: string, marks: Record<string, Stor
     plugins: [createMarksStatePlugin()],
   });
   const { view, getState } = createHeadlessView(state);
-  applyRemoteMarks(view as EditorView, effectiveMarks, { hydrateAnchors: true });
+  // Server mutations are speculative until their canonical write commits.
+  // Browser-local resolution caches must not suppress a later retry.
+  applyRemoteMarks(view as EditorView, effectiveMarks, { hydrateAnchors: true, useLocalCaches: false });
 
   const hydratedState = getState();
   const requiredIds = collectRequiredHydrationIds(effectiveMarks, markdown ?? '', serializedAuthoredMarks);

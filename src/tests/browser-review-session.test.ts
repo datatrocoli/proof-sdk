@@ -31,6 +31,7 @@ const port = (server.address() as any).port;
 const base = `http://127.0.0.1:${port}`;
 await collab.startCollabRuntimeEmbedded(port);
 let provider: HocuspocusProvider | undefined;
+let browserPeer: import('../bridge/collab-client.js').CollabClient | undefined;
 const ydoc = new Y.Doc();
 async function waitFor(fn: () => boolean | Promise<boolean>, label: string) {
   const until = Date.now() + 10000;
@@ -94,6 +95,18 @@ try {
   await waitFor(() => db.getDocumentBySlug(slug)?.markdown.includes('Saved from browser.') === true,
     'browser edit reaches durable storage');
   console.log('PASS: real browser socket persists typed text');
+  const { CollabClient } = await import('../bridge/collab-client.js');
+  browserPeer = new CollabClient();
+  let peerSynced = false;
+  const retired = new Set<string>();
+  browserPeer.onMarks(marks => {
+    for (const [id, mark] of Object.entries(marks)) {
+      if (['accepted', 'rejected'].includes((mark as any).status)) retired.add(id);
+    }
+  });
+  browserPeer.onSyncStatus(status => { peerSynced = status.isSynced; });
+  browserPeer.connect({ ...session.session, collabWsUrl: `ws://127.0.0.1:${port}/ws` });
+  await waitFor(() => peerSynced, 'second browser collaboration client');
 
   for (const action of ['accept', 'reject'] as const) {
     const response = await post(`/api/agent/${slug}/marks/suggest-replace`, {
@@ -103,9 +116,24 @@ try {
     const { marks } = await response.json();
     const id = Object.entries(marks).find(([, m]: any) => m.kind === 'replace' && m.status === 'pending')?.[0];
     assert.ok(id);
+    const peerMarks = browserPeer.getYDoc()!.getMap('marks');
+    await waitFor(() => peerMarks.has(id), 'proposal reaches second browser');
+    let stalePublishAttempts = 0;
+    const staleObserver = (event: Y.YMapEvent<unknown>) => {
+      if (event.changes.keys.get(id)?.action !== 'delete') return;
+      stalePublishAttempts++;
+      // Reproduce editor observers publishing old metadata synchronously while
+      // the remote-deletion notification is waiting for its microtask.
+      browserPeer!.setMarksMetadata({ [id]: marks[id] });
+    };
+    peerMarks.observe(staleObserver);
     const result = action === 'accept' ? await share.acceptSuggestion(id, 'human:test') : await share.rejectSuggestion(id, 'human:test');
     assert.ok(result && !('error' in result) && result.success, `Browser ${action} must succeed: ${JSON.stringify(result)}`);
     await waitFor(() => !db.getDocumentBySlug(slug)?.marks.includes(`\"${id}\"`), 'review is saved');
+    await waitFor(() => retired.has(id), 'second browser retires deleted proposal');
+    peerMarks.unobserve(staleObserver);
+    assert.ok(stalePublishAttempts > 0, 'The stale-observer race was exercised');
+    assert.equal(peerMarks.has(id), false, 'A synchronous observer must not republish a remotely deleted suggestion');
     const saved = db.getDocumentBySlug(slug)!;
     assert.ok(saved.markdown.includes('Saved from browser.'), 'Review preserves newer browser text');
     assert.ok(saved.markdown.includes(action === 'accept' ? 'Accepted sentence.' : 'Original sentence.'));
@@ -121,6 +149,7 @@ try {
   }
   console.log('PASS: plain-link and cookie sessions accept/reject complete suggestions through the real server');
 } finally {
+  browserPeer?.disconnect();
   provider?.disconnect();
   provider?.destroy();
   ydoc.destroy();

@@ -176,6 +176,7 @@ export class CollabClient {
   private activeSession: CollabSessionInfo | null = null;
   private markdownText: Y.Text | null = null;
   private marksMap: Y.Map<unknown> | null = null;
+  private retiredSuggestionIds = new Set<string>();
   private marksHandler: MarksHandler | null = null;
   private presenceHandler: PresenceHandler | null = null;
   private syncStatusHandler: SyncStatusHandler | null = null;
@@ -618,6 +619,9 @@ export class CollabClient {
         if (change.action !== 'delete') return;
         const previous = change.oldValue as { kind?: string } | undefined;
         if (previous && ['insert', 'delete', 'replace'].includes(previous.kind ?? '')) {
+          // Retire before deferring editor work. A synchronous document observer
+          // can publish stale metadata while the microtask below is pending.
+          this.retiredSuggestionIds.add(id);
           // An explicit Y.Map deletion is authoritative, unlike an empty initial
           // snapshot. Tell the editor to retire its cached suggestion too.
           finalized[id] = { ...previous, status: 'accepted' };
@@ -626,7 +630,7 @@ export class CollabClient {
       // Consume the document update before hydrating its corresponding anchors.
       queueMicrotask(() => {
         if (this.provider !== provider || !this.marksHandler) return;
-        this.marksHandler({ ...finalized, ...this.readMarks() });
+        this.marksHandler({ ...this.readMarks(), ...finalized });
       });
     });
 
@@ -829,8 +833,11 @@ export class CollabClient {
       return;
     }
     const currentMarksSnapshot = this.readMarks();
-    const mergedMarks: Record<string, unknown> = { ...marks };
+    const mergedMarks: Record<string, unknown> = Object.fromEntries(
+      Object.entries(marks).filter(([id]) => !this.retiredSuggestionIds.has(id)),
+    );
     this.marksMap.forEach((value, key) => {
+      if (this.retiredSuggestionIds.has(key)) return;
       if (mergedMarks[key] !== undefined) return;
       if (!shouldPreserveMissingLocalMark(value)) return;
       mergedMarks[key] = value as unknown;
@@ -891,6 +898,7 @@ export class CollabClient {
     }
     this.markdownText = null;
     this.marksMap = null;
+    this.retiredSuggestionIds.clear();
     this.activeSession = null;
     this.lastDisconnectAt = null;
     this.connectionStatus = 'disconnected';
