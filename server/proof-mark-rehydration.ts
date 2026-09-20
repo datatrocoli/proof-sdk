@@ -405,6 +405,14 @@ export async function finalizeSuggestionThroughRehydration(args: {
   }
 
   const result = await finalizeRehydratedState(rehydrated.strippedMarkdown, rehydrated.view.state);
+  if (result.ok) {
+    // Keep the API's tombstones in sync with proposals consumed by the review.
+    for (const id of rehydrated.hydratedIds) {
+      const kind = canonicalMarks[id]?.kind;
+      if ((kind === 'insert' || kind === 'delete' || kind === 'replace')
+        && !result.marks[id] && !resolvedMarkIds.includes(id)) resolvedMarkIds.push(id);
+    }
+  }
   return result.ok ? {
     ...result,
     marks: { ...result.marks, ...orphanedComments },

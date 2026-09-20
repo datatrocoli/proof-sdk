@@ -944,6 +944,18 @@ function removeSuggestionAnchors(
   return tr;
 }
 
+function includeConsumedSuggestions(tr: Transaction, previous: Mark[], resolvedIds: string[]): void {
+  const remaining = getProofAnchorIds(tr.doc);
+  for (const mark of previous) {
+    if ((mark.kind === 'insert' || mark.kind === 'replace' || mark.kind === 'delete')
+      && !remaining.has(mark.id) && !resolvedIds.includes(mark.id)) {
+      // Replacing/deleting a passage also consumes proposals anchored entirely
+      // inside it. Retire those IDs so stale clients cannot reattach them.
+      resolvedIds.push(mark.id);
+    }
+  }
+}
+
 function applyShareContentMutationAllowance(
   tr: Transaction,
   meta?: OrchestratedMarkMeta
@@ -2787,8 +2799,8 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
     case 'insert': {
       const markType = getMarkTypeForKind(view.state, 'insert');
       if (!markType) return false;
+      tr = removeSuggestionAnchors(tr, new Set(resolvedIds));
       for (const range of ranges) {
-        tr = tr.removeMark(range.from, range.to, markType);
         if (group) {
           // Accept exactly the visible typed contribution, preserving nested marks.
           tr = addAuthoredMarkToTransaction(view.state, tr, range, mark.by);
@@ -2817,8 +2829,7 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
       const markType = getMarkTypeForKind(view.state, 'replace');
       if (markType) {
         // Ensure the accepted suggestion mark clears even when the replacement content is a no-op.
-        const attrs = buildSuggestionAttrs(mark.id, 'replace', mark.by, metadata[mark.id]);
-        tr = tr.removeMark(range.from, range.to, markType.create(attrs));
+        tr = removeSuggestionAnchors(tr, new Set(resolvedIds));
       }
       const replacementContent =
         (typeof data?.content === 'string' && data.content.trim().length > 0)
@@ -2866,6 +2877,7 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
   }
 
   if (!applied) return false;
+  includeConsumedSuggestions(tr, marks, resolvedIds);
   const updatedMetadata = removeMetadataEntries(metadata, resolvedIds);
   finalizeMarkTransaction(view, tr, updatedMetadata);
   markResolvedMarkIds(resolvedIds, Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
@@ -2894,23 +2906,20 @@ export function reject(view: EditorView, markId: string): boolean {
     case 'delete': {
       const markType = getMarkTypeForKind(view.state, 'delete');
       if (!markType) return false;
-      for (const range of ranges) {
-        tr = tr.removeMark(range.from, range.to, markType);
-      }
+      tr = removeSuggestionAnchors(tr, new Set(resolvedIds));
       break;
     }
     case 'replace': {
       const markType = getMarkTypeForKind(view.state, 'replace');
       if (!markType) return false;
-      for (const range of ranges) {
-        tr = tr.removeMark(range.from, range.to, markType);
-      }
+      tr = removeSuggestionAnchors(tr, new Set(resolvedIds));
       break;
     }
     default:
       return false;
   }
 
+  includeConsumedSuggestions(tr, marks, resolvedIds);
   const updatedMetadata = removeMetadataEntries(metadata, resolvedIds);
   finalizeMarkTransaction(view, tr, updatedMetadata);
   markResolvedMarkIds(resolvedIds, Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');

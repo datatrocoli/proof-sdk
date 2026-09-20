@@ -111,5 +111,40 @@ try {
     lost: { kind: 'insert', by: 'human:Test', status: 'pending', quote: 'Missing contribution.', content: 'Missing contribution.' },
   }, markId: 'lost', action: 'accept' });
   assert.equal(missingTarget.ok, false, 'Review still refuses a target that cannot be located');
+
+  // An agent can propose a replacement over a still-pending human contribution.
+  // Review elsewhere must work too, without losing either overlapping proposal.
+  for (const action of ['accept', 'reject'] as const) {
+    for (const target of ['agent', 'human', 'unrelated'] as const) {
+      const prefix = `overlap-${action}-${target}-`;
+      const human1 = prefix + 'human1', human2 = prefix + 'human2';
+      const agent = prefix + 'agent', unrelated = prefix + 'unrelated';
+      const result = await finalizeSuggestionThroughRehydration({
+        markdown: 'Full contribution.\n\nOther sentence.\n',
+        marks: {
+          [human1]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'Full ', quote: 'Full ', range: { from: 1, to: 6 } },
+          [human2]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'contribution.', quote: 'contribution.', range: { from: 6, to: 19 } },
+          [agent]: { kind: 'replace', by: 'ai:Reviewer', status: 'pending', content: 'Revised contribution.', quote: 'Full contribution.' },
+          [unrelated]: { kind: 'replace', by: 'ai:Reviewer', status: 'pending', content: 'Revised sentence.', quote: 'Other sentence.' },
+        }, markId: target === 'agent' ? agent : target === 'human' ? human2 : unrelated, action,
+      });
+      assert.ok(result.ok, JSON.stringify(result));
+      const text = result.repairedStrippedMarkdown.trim();
+      if (target === 'agent') {
+        assert.equal(text, `${action === 'accept' ? 'Revised contribution.' : 'Full contribution.'}\n\nOther sentence.`);
+        assert.equal(Boolean(result.marks[human1]), action === 'reject', 'Rejecting the overlay preserves the human insertion');
+        assert.equal(Boolean(result.marks[human2]), action === 'reject');
+        assert.equal(result.resolvedMarkIds?.includes(human1), action === 'accept', 'Consumed anchors must be retired so clients cannot resurrect them');
+        assert.ok(result.marks[unrelated]);
+      } else if (target === 'human') {
+        assert.equal(text, action === 'accept' ? 'Full contribution.\n\nOther sentence.' : 'Other sentence.');
+        assert.equal(Boolean(result.marks[agent]), action === 'accept', 'Accepting the insertion keeps the agent proposal pending');
+        assert.ok(!result.marks[human1] && !result.marks[human2]);
+      } else {
+        assert.equal(text, `Full contribution.\n\n${action === 'accept' ? 'Revised sentence.' : 'Other sentence.'}`);
+        assert.ok(result.marks[agent] && result.marks[human1] && result.marks[human2], 'Unrelated review preserves all overlapping proposals');
+      }
+    }
+  }
   console.log('PASS: paused typing, reconnects, accents, grouped review, formatting and shared acceptance/rejection');
 } finally { Date.now = originalNow; }

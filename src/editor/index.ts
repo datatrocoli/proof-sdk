@@ -6609,12 +6609,18 @@ class ProofEditorImpl implements ProofEditor {
     markId: string,
     result?: unknown,
   ): void {
-    const status = result && typeof result === 'object' && 'error' in result
-      ? (result.error as { status?: number })?.status : undefined;
+    const error = result && typeof result === 'object' && 'error' in result
+      ? result.error as { status?: number; code?: string } : undefined;
+    const status = error?.status;
+    const code = error?.code ?? '';
+    const syncConflict = ['STALE_BASE', 'PROJECTION_STALE', 'AUTHORITATIVE_BASE_UNAVAILABLE',
+      'COLLAB_SYNC_FAILED', 'missing_mutation_base'].includes(code);
     const reason = status === 401 || status === 403
       ? 'This browser session does not have permission to review suggestions.'
-      : status === 409
+      : status === 409 && syncConflict
         ? 'The document is still syncing. Wait for it to finish and try again.'
+        : status === 409
+          ? `Proof could not safely apply this suggestion (${code || 'review conflict'}). Your text has not been changed.`
         : 'The server could not save the review. Check the connection and try again.';
     this.showErrorBanner(`Could not ${action} suggestion. ${reason}`, {
       retryLabel: 'Retry',

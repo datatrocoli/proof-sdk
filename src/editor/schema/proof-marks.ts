@@ -79,6 +79,9 @@ export const proofSuggestionSchema = $markSchema('proofSuggestion', (ctx) => ({
   },
   inclusive: false,
   spanning: true,
+  // A replacement can cover text that is itself a pending insertion. The
+  // default same-type exclusion would silently erase that earlier proposal.
+  excludes: '',
   parseDOM: [
     {
       tag: 'span[data-proof="suggestion"]',
