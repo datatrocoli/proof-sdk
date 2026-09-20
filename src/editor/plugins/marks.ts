@@ -1034,6 +1034,7 @@ function buildAnchorMarks(
 ): Mark[] {
   const anchors = new Map<string, AnchorInfo>();
   const authored: Mark[] = [];
+  const authoredSegments: Array<{ id: string | null; by: string; from: number; to: number }> = [];
   const authoredMetadataIds = new Map<string, string>();
 
   for (const [id, stored] of Object.entries(metadata)) {
@@ -1115,19 +1116,13 @@ function buildAnchorMarks(
         }
         case MARK_TYPE_NAMES.authored: {
           const by = mark.attrs.by || 'human:unknown';
-          const quote = normalizeQuote(doc.textBetween(from, to, '\n', '\n'));
-          const authoredId = (mark.attrs.id as string | null)
-            ?? authoredMetadataIds.get(`${by}:${from}-${to}`)
-            ?? `authored:${by}:${from}-${to}`;
-          authored.push({
-            id: authoredId,
-            kind: 'authored',
-            by,
-            at: '1970-01-01T00:00:00.000Z',
-            range: { from, to },
-            quote,
-            data: {},
-          });
+          const id = (mark.attrs.id as string | null) ?? null;
+          const previous = authoredSegments[authoredSegments.length - 1];
+          if (previous && previous.to === from && previous.by === by && previous.id === id) {
+            previous.to = to;
+          } else {
+            authoredSegments.push({ id, by, from, to });
+          }
           break;
         }
       }
@@ -1137,6 +1132,13 @@ function buildAnchorMarks(
   });
 
   const marks: Mark[] = [];
+  for (const { id, by, from, to } of authoredSegments) {
+    authored.push({
+      id: id ?? authoredMetadataIds.get(`${by}:${from}-${to}`) ?? `authored:${by}:${from}-${to}`,
+      kind: 'authored', by, at: '1970-01-01T00:00:00.000Z',
+      range: { from, to }, quote: normalizeQuote(doc.textBetween(from, to, '\n', '\n')), data: {},
+    });
+  }
 
   for (const anchor of anchors.values()) {
     const pluginMeta = metadata[anchor.id];

@@ -142,6 +142,7 @@ function isGapFullyCovered(
 function buildReplacementGroups(
   proofRanges: ProofRange[],
   replacementsById: Record<string, string>,
+  stripped: string,
 ): Array<{ start: number; end: number; replacement: string }> {
   const replacementIds = Object.keys(replacementsById);
   if (replacementIds.length === 0 || proofRanges.length === 0) return [];
@@ -169,7 +170,15 @@ function buildReplacementGroups(
 
     for (let index = 1; index < sorted.length; index += 1) {
       const next = sorted[index];
-      if (next.start <= currentEnd || isGapFullyCovered(coverage, currentEnd, next.start)) {
+      // Markdown can move inter-word whitespace outside a suggestion span.
+      // Join those fragments only while they still form this mark's quote;
+      // otherwise replacing every fragment duplicates the whole sentence.
+      const gap = stripped.slice(currentEnd, next.start);
+      const candidate = stripped.slice(currentStart, next.end).replace(/\s+/g, ' ').trim();
+      const whitespaceSplit = /^\s+$/.test(gap)
+        && !/[\r\n]/.test(gap)
+        && replacement.replace(/\s+/g, ' ').trim().startsWith(candidate);
+      if (next.start <= currentEnd || isGapFullyCovered(coverage, currentEnd, next.start) || whitespaceSplit) {
         currentEnd = Math.max(currentEnd, next.end);
         continue;
       }
@@ -221,7 +230,7 @@ function stripProofSpanTagsInternal(
 ): string {
   if (replacementsById) {
     const { stripped, proofRanges } = collectStrippedProofData(markdown, shouldStrip);
-    return applyReplacementGroups(stripped, buildReplacementGroups(proofRanges, replacementsById));
+    return applyReplacementGroups(stripped, buildReplacementGroups(proofRanges, replacementsById, stripped));
   }
 
   const spanTagRegex = /<\/?span\b[^>]*>/gi;

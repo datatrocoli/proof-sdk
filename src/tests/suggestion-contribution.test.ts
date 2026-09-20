@@ -146,5 +146,31 @@ try {
       }
     }
   }
-  console.log('PASS: paused typing, reconnects, accents, grouped review, formatting and shared acceptance/rejection');
+  // Review several proposals sequentially, feeding each serialized result back
+  // in just as a reload does. A successful first review must not damage the next.
+  for (const secondAction of ['accept', 'reject'] as const) {
+    const first = `sequence-${secondAction}-first`, second = `sequence-${secondAction}-second`;
+    const h1 = `sequence-${secondAction}-h1`, h2 = `sequence-${secondAction}-h2`;
+    const comment = `sequence-${secondAction}-comment`;
+    let result = await finalizeSuggestionThroughRehydration({
+      markdown: `<span data-proof="suggestion" data-id="${second}" data-kind="replace" data-by="ai:Reviewer">Full</span> <span data-proof="suggestion" data-id="${second}" data-kind="replace" data-by="ai:Reviewer">contribution.</span>\n\nOther sentence.\n`,
+      marks: {
+        [h1]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'Full', quote: 'Full' },
+        [h2]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'contribution.', quote: 'contribution.' },
+        [second]: { kind: 'replace', by: 'ai:Reviewer', status: 'pending', content: 'Revised contribution.', quote: 'Full contribution.' },
+        [first]: { kind: 'replace', by: 'ai:Reviewer', status: 'pending', content: 'Other sentence, expanded.', quote: 'Other sentence.' },
+        [comment]: { kind: 'comment', by: 'human:Daniel', quote: 'Other sentence', text: 'Keep this comment.', resolved: false },
+      }, markId: first, action: 'accept',
+    });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(result.repairedStrippedMarkdown.trim(), 'Full contribution.\n\nOther sentence, expanded.');
+    const afterFirst = result;
+    result = await finalizeSuggestionThroughRehydration({ markdown: result.markdown, marks: result.marks, markId: second, action: secondAction });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(result.repairedStrippedMarkdown.trim(), `${secondAction === 'accept' ? 'Revised contribution.' : 'Full contribution.'}\n\nOther sentence, expanded.`);
+    assert.deepEqual(result.missingRequiredMarkIds, [], 'Authorship split by a comment must still hydrate on the next review');
+    assert.ok(Object.values(afterFirst.marks).some(m => m.kind === 'authored' && m.by === 'ai:Reviewer'
+      && m.quote === 'Other sentence, expanded.'), 'The full authored passage survives inline comment splitting');
+  }
+  console.log('PASS: paused typing, reconnects, accents, grouped and sequential review, formatting and shared acceptance/rejection');
 } finally { Date.now = originalNow; }

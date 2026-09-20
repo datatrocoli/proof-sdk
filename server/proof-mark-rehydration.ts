@@ -201,8 +201,19 @@ function buildSerializedAuthoredFingerprintCounts(markdown: string): Map<string,
   return counts;
 }
 
-function collectRequiredHydrationIds(marks: Record<string, StoredMark>, markdown: string): string[] {
-  const serializedAuthoredCounts = buildSerializedAuthoredFingerprintCounts(markdown);
+function collectRequiredHydrationIds(
+  marks: Record<string, StoredMark>, markdown: string,
+  serializedAuthoredMarks?: Record<string, StoredMark> | null,
+): string[] {
+  const serializedAuthoredCounts = serializedAuthoredMarks
+    ? new Map<string, number>() : buildSerializedAuthoredFingerprintCounts(markdown);
+  // Comments/formatting can split one contiguous authored passage into several
+  // HTML spans. Match the logical passages extracted by the parser, not the
+  // incidental number of wrappers produced by serialization.
+  for (const mark of Object.values(serializedAuthoredMarks ?? {})) {
+    const fingerprint = authoredFingerprint(mark);
+    if (fingerprint) serializedAuthoredCounts.set(fingerprint, (serializedAuthoredCounts.get(fingerprint) ?? 0) + 1);
+  }
   const requiredIds: string[] = [];
 
   for (const [id, mark] of Object.entries(marks)) {
@@ -278,7 +289,7 @@ async function buildRehydratedState(markdown: string, marks: Record<string, Stor
   applyRemoteMarks(view as EditorView, effectiveMarks, { hydrateAnchors: true });
 
   const hydratedState = getState();
-  const requiredIds = collectRequiredHydrationIds(effectiveMarks, markdown ?? '');
+  const requiredIds = collectRequiredHydrationIds(effectiveMarks, markdown ?? '', serializedAuthoredMarks);
   const hydratedIds = collectHydratedMarkIds(hydratedState);
   const missingRequiredIds = buildMissingRequiredMarkIds(requiredIds, hydratedIds);
 
@@ -318,7 +329,7 @@ async function finalizeRehydratedState(
   const repairedMarks = canonicalizeStoredMarks(getMarkMetadataWithQuotes(state));
   const hydratedMarkIds = collectHydratedMarkIds(state);
   const missingRequiredMarkIds = buildMissingRequiredMarkIds(
-    collectRequiredHydrationIds(repairedMarks, repairedMarkdown),
+    collectRequiredHydrationIds(repairedMarks, repairedMarkdown, await extractAuthoredMarksFromMarkdown(repairedMarkdown)),
     hydratedMarkIds,
   );
 

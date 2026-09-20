@@ -84,6 +84,13 @@ function run(): void {
     'Expected replacement-aware stripping to rebuild split suggestion spans once per logical mark',
   );
 
+  const spacedFragments = '<span data-proof="suggestion" data-id="s3">Full</span> <span data-proof="suggestion" data-id="s3">contribution.</span>';
+  assertEqual(stripAllProofSpanTagsWithReplacements(spacedFragments, { s3: 'Full contribution.' }),
+    'Full contribution.', 'Whitespace between serialized fragments must not duplicate a quote');
+  const distinctOccurrences = '<span data-proof="suggestion" data-id="s4">Same.</span> <span data-proof="suggestion" data-id="s4">Same.</span>';
+  assertEqual(stripAllProofSpanTagsWithReplacements(distinctOccurrences, { s4: 'Same.' }),
+    'Same. Same.', 'Separate complete occurrences must not collapse together');
+
   console.log('✓ proof span stripping preserves non-authored marks');
 }
 
