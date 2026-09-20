@@ -1146,7 +1146,11 @@ function buildAnchorMarks(
     if (anchor.kind === 'comment') {
       data = buildCommentData(anchor.id, pluginMeta);
     } else if (anchor.kind === 'insert' || anchor.kind === 'delete' || anchor.kind === 'replace') {
-      data = buildSuggestionData(anchor.kind, meta as StoredMark | undefined, quote);
+      // Typed insertions already live in the document. Their preview must follow
+      // the complete inline text, not stale metadata from the first keystroke.
+      const suggestionMeta = anchor.kind === 'insert' && anchor.by.startsWith('human:')
+        ? { ...meta, content: text } : meta;
+      data = buildSuggestionData(anchor.kind, suggestionMeta as StoredMark | undefined, quote);
     } else if (anchor.kind === 'flagged') {
       data = pluginMeta?.note ? { note: pluginMeta.note } : undefined;
     }
@@ -1723,6 +1727,9 @@ export function applyRemoteMarks(
     filteredEntries.push([id, stored]);
   }
 
+  // Retire cached IDs before dispatch: synchronous observers must not publish a
+  // deleted suggestion back while the shared document is applying acceptance.
+  markResolvedMarkIds([...finalizedSuggestionIds], now, RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
   tr = removeSuggestionAnchors(tr, finalizedSuggestionIds);
 
   if (hydrateAnchors) {
@@ -2718,6 +2725,50 @@ function applyMarkdownInsert(
   return { ok: true, tr, appliedRange };
 }
 
+/** Review adjacent pieces of a human insertion as one contribution. */
+export function getInsertionReviewGroup(state: EditorState, markId: string): {
+  ids: string[]; range: MarkRange; content: string;
+} | null {
+  const marks = getMarks(state);
+  const target = marks.find(mark => mark.id === markId);
+  if (target?.kind !== 'insert' || !target.by.startsWith('human:')) return null;
+  const entries = marks.filter(mark => mark.kind === 'insert' && mark.by === target.by
+    && (mark.data as InsertData)?.status === 'pending'
+    && !(mark.data as InsertData)?.proposalId && !(mark.data as InsertData)?.runId)
+    .flatMap(mark => {
+      // Only live, contiguous anchors qualify. Do not group stale quote matches.
+      const ranges = collectAnchorRanges(state.doc, mark);
+      if (ranges.length !== 1) return [];
+      const range = ranges[0];
+      const $from = state.doc.resolve(range.from);
+      const $to = state.doc.resolve(range.to);
+      return $from.sameParent($to) ? [{ id: mark.id, range, parent: $from.start() }] : [];
+    }).sort((a, b) => a.range.from - b.range.from);
+  const index = entries.findIndex(entry => entry.id === markId);
+  if (index < 0) return null;
+  const adjacent = (left: typeof entries[number], right: typeof entries[number]) => {
+    if (left.range.to === right.range.from) return true;
+    if (left.range.to > right.range.from) return false;
+    // Markdown serialization may leave inter-word spaces outside their spans.
+    // Include those spaces, but never cross another author's tracked change.
+    const gap = state.doc.textBetween(left.range.to, right.range.from, '\n');
+    if (!/^\s+$/.test(gap)) return false;
+    let trackedGap = false;
+    state.doc.nodesBetween(left.range.to, right.range.from, node => {
+      if (node.marks.some(mark => mark.type.name === MARK_TYPE_NAMES.suggestion)) trackedGap = true;
+    });
+    return !trackedGap;
+  };
+  let left = index, right = index;
+  while (left > 0 && entries[left - 1].parent === entries[index].parent
+    && adjacent(entries[left - 1], entries[left])) left--;
+  while (right + 1 < entries.length && entries[right + 1].parent === entries[index].parent
+    && adjacent(entries[right], entries[right + 1])) right++;
+  const range = { from: entries[left].range.from, to: entries[right].range.to };
+  return { ids: entries.slice(left, right + 1).map(entry => entry.id), range,
+    content: state.doc.textBetween(range.from, range.to, '\n') };
+}
+
 export function accept(view: EditorView, markId: string, parser?: MarkdownParser): boolean {
   const effectiveParser = resolveMarkdownParser(parser);
   const marks = getMarks(view.state);
@@ -2726,7 +2777,9 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
 
   const metadata = getMarkMetadata(view.state);
   let tr = view.state.tr;
-  const ranges = resolveActionRangesDescending(view.state.doc, mark);
+  const group = getInsertionReviewGroup(view.state, markId);
+  const resolvedIds = group?.ids ?? [markId];
+  const ranges = group ? [group.range] : resolveActionRangesDescending(view.state.doc, mark);
   if (ranges.length === 0) return false;
   let applied = false;
 
@@ -2736,6 +2789,11 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
       if (!markType) return false;
       for (const range of ranges) {
         tr = tr.removeMark(range.from, range.to, markType);
+        if (group) {
+          // Accept exactly the visible typed contribution, preserving nested marks.
+          tr = addAuthoredMarkToTransaction(view.state, tr, range, mark.by);
+          continue;
+        }
         const data = mark.data as InsertData | undefined;
         const content = data?.content ?? getTextForRange(view.state.doc, range);
         const result = applyMarkdownInsert(view, tr, range, content, mark.by, effectiveParser);
@@ -2808,10 +2866,10 @@ export function accept(view: EditorView, markId: string, parser?: MarkdownParser
   }
 
   if (!applied) return false;
-  const updatedMetadata = removeMetadataEntries(metadata, [markId]);
+  const updatedMetadata = removeMetadataEntries(metadata, resolvedIds);
   finalizeMarkTransaction(view, tr, updatedMetadata);
-  markResolvedMarkIds([markId], Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
-  emitMarkEvent('suggestion.accepted', { markId, kind: mark.kind, by: mark.by });
+  markResolvedMarkIds(resolvedIds, Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
+  emitMarkEvent('suggestion.accepted', { markId, markIds: resolvedIds, kind: mark.kind, by: mark.by });
   return true;
 }
 
@@ -2822,7 +2880,9 @@ export function reject(view: EditorView, markId: string): boolean {
 
   const metadata = getMarkMetadata(view.state);
   let tr = view.state.tr;
-  const ranges = resolveActionRangesDescending(view.state.doc, mark);
+  const group = getInsertionReviewGroup(view.state, markId);
+  const resolvedIds = group?.ids ?? [markId];
+  const ranges = group ? [group.range] : resolveActionRangesDescending(view.state.doc, mark);
   if (ranges.length === 0) return false;
 
   switch (mark.kind) {
@@ -2851,10 +2911,10 @@ export function reject(view: EditorView, markId: string): boolean {
       return false;
   }
 
-  const updatedMetadata = removeMetadataEntries(metadata, [markId]);
+  const updatedMetadata = removeMetadataEntries(metadata, resolvedIds);
   finalizeMarkTransaction(view, tr, updatedMetadata);
-  markResolvedMarkIds([markId], Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
-  emitMarkEvent('suggestion.rejected', { markId, kind: mark.kind, by: mark.by });
+  markResolvedMarkIds(resolvedIds, Date.now(), RESOLVED_MARK_TOMBSTONE_TTL_MS, 'deleted');
+  emitMarkEvent('suggestion.rejected', { markId, markIds: resolvedIds, kind: mark.kind, by: mark.by });
   return true;
 }
 

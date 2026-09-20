@@ -11,6 +11,7 @@ import {
   reject as rejectSuggestion,
   flag,
   getMarks,
+  getInsertionReviewGroup,
   resolveMarks,
   deleteMark,
   setActiveMark,
@@ -1227,7 +1228,7 @@ class MarkPopoverController {
     let detail = '';
     if (mark.kind === 'insert') {
       const data = mark.data as InsertData | undefined;
-      detail = data?.content ?? '';
+      detail = getInsertionReviewGroup(this.view.state, mark.id)?.content ?? data?.content ?? '';
     } else if (mark.kind === 'replace') {
       const data = mark.data as ReplaceData | undefined;
       detail = data?.content ?? '';

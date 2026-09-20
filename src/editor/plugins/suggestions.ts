@@ -10,7 +10,7 @@ import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } 
 import type { MarkType, Node as ProseMirrorNode } from '@milkdown/kit/prose/model';
 
 import { marksPluginKey, getMarkMetadata, buildSuggestionMetadata, getMarks } from './marks';
-import { generateMarkId, type InsertData, type MarkRange } from '../../formats/marks';
+import { generateMarkId, type MarkRange } from '../../formats/marks';
 import { getCurrentActor } from '../actor';
 
 // Suggestion state
@@ -32,55 +32,23 @@ type SliceNode = {
   content?: SliceNode[];
 };
 
-const COALESCE_WINDOW_MS = 750;
-
-type InsertCoalesceState = { id: string; from: number; to: number; by: string; updatedAt: number };
-
-const lastInsertByActor = new Map<string, InsertCoalesceState>();
-
 function normalizeSuggestionKind(kind: unknown): SuggestionKind {
   if (kind === 'insert' || kind === 'delete' || kind === 'replace') return kind;
   return 'replace';
 }
 
-function isWhitespaceOnly(text: string): boolean {
-  return /^[\s\u00A0]+$/.test(text);
-}
-
-function getCoalescableInsertCandidate(
-  state: EditorState,
-  pos: number,
-  by: string,
-  now: number
-): { id: string; range: MarkRange; direction: 'append' | 'prepend' } | null {
-  const cached = lastInsertByActor.get(by);
-  if (!cached) return null;
-  if (now - cached.updatedAt > COALESCE_WINDOW_MS) {
-    lastInsertByActor.delete(by);
-    return null;
+function getCoalescableInsertCandidate(state: EditorState, pos: number, by: string): { id: string; range: MarkRange } | null {
+  // A pending insertion is one contribution, even after a pause or reconnect.
+  // Use the actual inline anchor beside the cursor, not a process-global timer.
+  const $pos = state.doc.resolve(pos);
+  for (const node of [$pos.nodeBefore, $pos.nodeAfter]) {
+    const anchor = node?.marks.find(mark => mark.type.name === 'proofSuggestion'
+      && mark.attrs.kind === 'insert' && mark.attrs.by === by);
+    if (!anchor) continue;
+    const match = getMarks(state).find(mark => mark.id === anchor.attrs.id && mark.kind === 'insert');
+    if (!match?.range || (match.data as { status?: string })?.status !== 'pending') continue;
+    if (match.range.from <= pos && pos <= match.range.to) return { id: match.id, range: match.range };
   }
-
-  const marks = getMarks(state);
-  const match = marks.find(mark => mark.id === cached.id && mark.kind === 'insert' && mark.by === by);
-  if (!match || !match.range) {
-    lastInsertByActor.delete(by);
-    return null;
-  }
-
-  const data = match.data as InsertData | undefined;
-  if (data?.status && data.status !== 'pending') {
-    lastInsertByActor.delete(by);
-    return null;
-  }
-
-  if (match.range.to === pos) {
-    return { id: match.id, range: match.range, direction: 'append' };
-  }
-
-  if (match.range.from === pos) {
-    return { id: match.id, range: match.range, direction: 'prepend' };
-  }
-
   return null;
 }
 
@@ -199,7 +167,6 @@ export function wrapTransactionForSuggestions(
 
       // CASE 1: Pure deletion (no insertion)
       if (deletedText && !insertedText) {
-        lastInsertByActor.delete(actor);
         const existing = detectSuggestionKinds(newTr.doc, safeFrom, safeTo, suggestionType);
 
         if (existing.hasDelete || existing.hasInsert) {
@@ -231,136 +198,23 @@ export function wrapTransactionForSuggestions(
       }
       // CASE 2: Pure insertion (no deletion)
       else if (insertedText && !deletedText) {
-        const now = Date.now();
-        const whitespaceOnly = isWhitespaceOnly(insertedText);
-        const candidate = getCoalescableInsertCandidate(state, safeFrom, actor, now);
-
-        if (candidate && whitespaceOnly) {
-          // Whitespace with active candidate: extend the mark to include it.
-          // This keeps "Proof is" as one suggestion instead of splitting at the space.
-          const existingMeta = metadata[candidate.id];
-          const existingContent = typeof existingMeta?.content === 'string' ? existingMeta.content : '';
-          const updatedContent = candidate.direction === 'append'
-            ? `${existingContent}${insertedText}`
-            : `${insertedText}${existingContent}`;
-
-          newTr.insertText(insertedText, safeFrom);
-          newTr.addMark(
-            safeFrom,
-            safeFrom + insertedText.length,
-            suggestionType.create({ id: candidate.id, kind: 'insert', by: actor })
-          );
-          writeOffset += insertedText.length;
-
-          metadata = {
-            ...metadata,
-            [candidate.id]: {
-              ...existingMeta,
-              content: updatedContent,
-            },
-          };
-          metadataChanged = true;
-
-          lastInsertByActor.set(actor, {
-            id: candidate.id,
-            from: candidate.range.from,
-            to: candidate.range.to + insertedText.length,
-            by: actor,
-            updatedAt: now,
-          });
-        } else if (candidate) {
-          // Non-whitespace with active candidate: coalesce into existing mark
-          const existingMeta = metadata[candidate.id];
-          const existingContent = typeof existingMeta?.content === 'string' ? existingMeta.content : '';
-          const updatedContent = candidate.direction === 'append'
-            ? `${existingContent}${insertedText}`
-            : `${insertedText}${existingContent}`;
-
-          newTr.insertText(insertedText, safeFrom);
-          newTr.addMark(
-            safeFrom,
-            safeFrom + insertedText.length,
-            suggestionType.create({ id: candidate.id, kind: 'insert', by: actor })
-          );
-          writeOffset += insertedText.length;
-
-          metadata = {
-            ...metadata,
-            [candidate.id]: {
-              ...existingMeta,
-              kind: 'insert',
-              by: actor,
-              content: updatedContent,
-              status: existingMeta?.status ?? 'pending',
-              createdAt: existingMeta?.createdAt ?? new Date().toISOString(),
-            },
-          };
-          metadataChanged = true;
-
-          lastInsertByActor.set(actor, {
-            id: candidate.id,
-            from: candidate.range.from,
-            to: candidate.range.to + insertedText.length,
-            by: actor,
-            updatedAt: now,
-          });
-        } else if (whitespaceOnly) {
-          // Standalone whitespace, no active candidate: create a tracked suggestion mark.
-          const suggestionId = generateMarkId();
-          const createdAt = new Date().toISOString();
-
-          newTr.insertText(insertedText, safeFrom);
-          newTr.addMark(
-            safeFrom,
-            safeFrom + insertedText.length,
-            suggestionType.create({ id: suggestionId, kind: 'insert', by: actor })
-          );
-          writeOffset += insertedText.length;
-
-          metadata = {
-            ...metadata,
-            [suggestionId]: buildSuggestionMetadata('insert', actor, insertedText, createdAt),
-          };
-          metadataChanged = true;
-
-          lastInsertByActor.set(actor, {
-            id: suggestionId,
-            from: safeFrom,
-            to: safeFrom + insertedText.length,
-            by: actor,
-            updatedAt: now,
-          });
-        } else {
-          // New non-whitespace text, no candidate: create fresh suggestion mark
-          const suggestionId = generateMarkId();
-          const createdAt = new Date().toISOString();
-
-          newTr.insertText(insertedText, safeFrom);
-          newTr.addMark(
-            safeFrom,
-            safeFrom + insertedText.length,
-            suggestionType.create({ id: suggestionId, kind: 'insert', by: actor })
-          );
-          writeOffset += insertedText.length;
-
-          metadata = {
-            ...metadata,
-            [suggestionId]: buildSuggestionMetadata('insert', actor, insertedText, createdAt),
-          };
-          metadataChanged = true;
-
-          lastInsertByActor.set(actor, {
-            id: suggestionId,
-            from: safeFrom,
-            to: safeFrom + insertedText.length,
-            by: actor,
-            updatedAt: now,
-          });
-        }
+        const candidate = getCoalescableInsertCandidate(state, safeFrom, actor);
+        const id = candidate?.id ?? generateMarkId();
+        const entry = metadata[id] ?? buildSuggestionMetadata('insert', actor, insertedText, new Date().toISOString());
+        newTr.insertText(insertedText, safeFrom);
+        const range = candidate
+          ? { from: candidate.range.from, to: candidate.range.to + insertedText.length }
+          : { from: safeFrom, to: safeFrom + insertedText.length };
+        const content = newTr.doc.textBetween(range.from, range.to, '\n');
+        metadata = { ...metadata, [id]: { ...entry, content, status: 'pending' } };
+        newTr.addMark(range.from, range.to, suggestionType.create({
+          ...entry, id, kind: 'insert', by: actor, content, status: 'pending',
+        }));
+        metadataChanged = true;
+        writeOffset += insertedText.length;
       }
       // CASE 3: Replacement (deletion + insertion)
       else if (deletedText && insertedText) {
-        lastInsertByActor.delete(actor);
         const existing = detectSuggestionKinds(newTr.doc, safeFrom, safeTo, suggestionType);
 
         if (existing.hasDelete) {
@@ -385,21 +239,19 @@ export function wrapTransactionForSuggestions(
           metadataChanged = true;
         } else if (existing.hasInsert) {
           // Replace inside a pending insertion - keep it as an insertion suggestion.
-          const suggestionId = generateMarkId();
-          const createdAt = new Date().toISOString();
-
+          const candidate = getCoalescableInsertCandidate(state, safeFrom, actor);
+          const suggestionId = candidate && safeTo <= candidate.range.to ? candidate.id : generateMarkId();
+          const entry = metadata[suggestionId] ?? buildSuggestionMetadata('insert', actor, insertedText, new Date().toISOString());
           newTr.replaceWith(safeFrom, safeTo, state.schema.text(insertedText));
-          newTr.addMark(
-            safeFrom,
-            safeFrom + insertedText.length,
-            suggestionType.create({ id: suggestionId, kind: 'insert', by: actor })
-          );
+          const range = candidate && suggestionId === candidate.id
+            ? { from: candidate.range.from, to: candidate.range.to + insertedText.length - deletedText.length }
+            : { from: safeFrom, to: safeFrom + insertedText.length };
+          const content = newTr.doc.textBetween(range.from, range.to, '\n');
+          newTr.addMark(range.from, range.to, suggestionType.create({
+            ...entry, id: suggestionId, kind: 'insert', by: actor, content, status: 'pending',
+          }));
           writeOffset += insertedText.length - deletedText.length;
-
-          metadata = {
-            ...metadata,
-            [suggestionId]: buildSuggestionMetadata('insert', actor, insertedText, createdAt),
-          };
+          metadata = { ...metadata, [suggestionId]: { ...entry, content, status: 'pending' } };
           metadataChanged = true;
         } else {
           // Replace: keep original text, store replacement content in metadata.

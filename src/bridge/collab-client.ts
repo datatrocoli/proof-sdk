@@ -609,14 +609,24 @@ export class CollabClient {
 
     const markdownText = ydoc.getText('markdown');
     const marksMap = ydoc.getMap('marks');
-    marksMap.observe((_event, transaction) => {
+    marksMap.observe((event, transaction) => {
       if (!this.marksHandler) return;
       if (transaction.origin === 'local-marks-sync') return;
       if (this.applyingLocalMarks) return;
+      const finalized: Record<string, unknown> = {};
+      event.changes.keys.forEach((change, id) => {
+        if (change.action !== 'delete') return;
+        const previous = change.oldValue as { kind?: string } | undefined;
+        if (previous && ['insert', 'delete', 'replace'].includes(previous.kind ?? '')) {
+          // An explicit Y.Map deletion is authoritative, unlike an empty initial
+          // snapshot. Tell the editor to retire its cached suggestion too.
+          finalized[id] = { ...previous, status: 'accepted' };
+        }
+      });
       // Consume the document update before hydrating its corresponding anchors.
       queueMicrotask(() => {
         if (this.provider !== provider || !this.marksHandler) return;
-        this.marksHandler(this.readMarks());
+        this.marksHandler({ ...finalized, ...this.readMarks() });
       });
     });
 

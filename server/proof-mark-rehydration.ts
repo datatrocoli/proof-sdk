@@ -6,6 +6,7 @@ import {
   accept as acceptMark,
   getMarkMetadataWithQuotes,
   getMarks,
+  getInsertionReviewGroup,
   marksPluginKey,
   reject as rejectMark,
 } from '../src/editor/plugins/marks.js';
@@ -46,6 +47,7 @@ export type ProofMarkRehydrationFailure = {
 
 export type ProofMarkRehydrationSuccess = {
   ok: true;
+  resolvedMarkIds?: string[];
   markdown: string;
   marks: Record<string, StoredMark>;
   strippedMarkdown: string;
@@ -382,6 +384,7 @@ export async function finalizeSuggestionThroughRehydration(args: {
     );
   }
 
+  const resolvedMarkIds = getInsertionReviewGroup(rehydrated.view.state, args.markId)?.ids ?? [args.markId];
   const didApply = args.action === 'accept'
     ? acceptMark(rehydrated.view as EditorView, args.markId, rehydrated.parseMarkdown as never)
     : rejectMark(rehydrated.view as EditorView, args.markId);
@@ -395,5 +398,6 @@ export async function finalizeSuggestionThroughRehydration(args: {
     );
   }
 
-  return finalizeRehydratedState(rehydrated.strippedMarkdown, rehydrated.view.state);
+  const result = await finalizeRehydratedState(rehydrated.strippedMarkdown, rehydrated.view.state);
+  return result.ok ? { ...result, resolvedMarkIds } : result;
 }

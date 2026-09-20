@@ -1224,7 +1224,7 @@ class ProofEditorImpl implements ProofEditor {
       .use(marksSyncPlugin((_actionMarks, view) => {
         // Capture this before deferring: the remote-apply scope ends before the
         // microtask runs. Otherwise a received mark is published back as local.
-        if (this.suppressMarksSync) return;
+        if (this.suppressMarksSync || ySyncPluginKey.getState(view.state)?.isChangeOrigin) return;
         // Finish all editor plugin updates (including Yjs content sync) before
         // publishing marks. Publishing inside view.update can race the fragment.
         queueMicrotask(() => {
@@ -1501,9 +1501,13 @@ class ProofEditorImpl implements ProofEditor {
             }
           }
 
-          this.lastReceivedServerMarks = { ...mergedIncomingMarks };
+          const finalized = Object.fromEntries(Object.entries(incomingMarks).filter(([, mark]) =>
+            mark.status === 'accepted' || mark.status === 'rejected'));
+          // Keep explicit finalization notices through anchor hydration; merging
+          // alone removes the metadata but leaves old anchors free to reappear.
+          this.lastReceivedServerMarks = { ...mergedIncomingMarks, ...finalized };
           this.initialMarksSynced = true;
-          if (Object.keys(mergedIncomingMarks).length > 0 && !this.isEditorDocStructurallyEmpty()) {
+          if (Object.keys(this.lastReceivedServerMarks).length > 0 && !this.isEditorDocStructurallyEmpty()) {
             this.applyLatestCollabMarksToEditor();
           }
         });

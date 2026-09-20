@@ -2427,24 +2427,21 @@ async function updateSuggestionStatusAsync(
     };
   }
 
+  const resolvedMarkIds = structuredResult.resolvedMarkIds ?? [markId];
   const eventId = addDocumentEvent(
     slug,
     `suggestion.${status}`,
-    { markId, status, by: actor },
+    { markId, markIds: resolvedMarkIds, status, by: actor },
     actor,
     mutationContextIdempotencyKey(context),
     mutationContextIdempotencyRoute(context),
   );
-  upsertMarkTombstone(slug, markId, status, mutation.document.revision);
   const updatedMarks = parseMarks(mutation.document.marks);
-  const responseMarks: Record<string, StoredMark> = {
-    ...updatedMarks,
-    [markId]: {
-      ...existing,
-      ...(updatedMarks[markId] ?? {}),
-      status,
-    },
-  };
+  const responseMarks: Record<string, StoredMark> = { ...updatedMarks };
+  for (const resolvedId of resolvedMarkIds) {
+    upsertMarkTombstone(slug, resolvedId, status, mutation.document.revision);
+    responseMarks[resolvedId] = { ...marks[resolvedId], ...updatedMarks[resolvedId], status };
+  }
   return {
     status: 200,
     body: {
