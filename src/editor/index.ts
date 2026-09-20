@@ -6604,6 +6604,24 @@ class ProofEditorImpl implements ProofEditor {
     return this.markReject(String(id));
   }
 
+  private showSuggestionReviewError(
+    action: 'accept' | 'reject',
+    markId: string,
+    result?: unknown,
+  ): void {
+    const status = result && typeof result === 'object' && 'error' in result
+      ? (result.error as { status?: number })?.status : undefined;
+    const reason = status === 401 || status === 403
+      ? 'This browser session does not have permission to review suggestions.'
+      : status === 409
+        ? 'The document is still syncing. Wait for it to finish and try again.'
+        : 'The server could not save the review. Check the connection and try again.';
+    this.showErrorBanner(`Could not ${action} suggestion. ${reason}`, {
+      retryLabel: 'Retry',
+      onRetry: () => action === 'accept' ? this.markAccept(markId) : this.markReject(markId),
+    });
+  }
+
   /**
    * Accept all pending suggestions
    */
@@ -8539,7 +8557,11 @@ class ProofEditorImpl implements ProofEditor {
 
       const actor = getCurrentActor();
       void shareClient.acceptSuggestion(markId, actor).then((result) => {
-        if (!result || 'error' in result || result.success !== true) return;
+        if (!result || 'error' in result || result.success !== true) {
+          this.showSuggestionReviewError('accept', markId, result);
+          return;
+        }
+        this.clearErrorBanner();
         const serverMarks = (result.marks && typeof result.marks === 'object' && !Array.isArray(result.marks))
           ? result.marks as Record<string, StoredMark>
           : null;
@@ -8557,6 +8579,7 @@ class ProofEditorImpl implements ProofEditor {
         captureEvent('suggestion_accepted', { count: 1 });
       }).catch((error) => {
         console.error('[markAccept] Failed to persist suggestion acceptance via share mutation:', error);
+        this.showSuggestionReviewError('accept', markId);
       });
       return true;
     }
@@ -8620,14 +8643,21 @@ class ProofEditorImpl implements ProofEditor {
       // Finalize on the server before changing shared anchors. Optimistic anchor
       // removal can reach Yjs before the API reads the suggestion it must reject.
       void shareClient.rejectSuggestion(markId, getCurrentActor()).then(result => {
-        if (!result || 'error' in result || !result.success || !result.marks) return;
+        if (!result || 'error' in result || !result.success || !result.marks) {
+          this.showSuggestionReviewError('reject', markId, result);
+          return;
+        }
+        this.clearErrorBanner();
         const marks = result.marks as Record<string, StoredMark>;
         this.lastReceivedServerMarks = { ...marks };
         this.initialMarksSynced = true;
         this.editor?.action(ctx => {
           applyRemoteMarks(ctx.get(editorViewCtx), marks, { hydrateAnchors: this.collabCanEdit });
         });
-      }).catch(error => console.error('[markReject] Failed to persist rejection:', error));
+      }).catch(error => {
+        console.error('[markReject] Failed to persist rejection:', error);
+        this.showSuggestionReviewError('reject', markId);
+      });
       return true;
     }
 

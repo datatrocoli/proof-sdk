@@ -374,13 +374,19 @@ export async function finalizeSuggestionThroughRehydration(args: {
       rehydrated.missingRequiredIds,
     );
   }
-  if (rehydrated.missingRequiredIds.length > 0) {
+  // A comment can outlive the passage it referred to. Keep that thread intact,
+  // but do not let its missing anchor block review of an unrelated suggestion.
+  const orphanedComments = Object.fromEntries(rehydrated.missingRequiredIds
+    .filter(id => canonicalMarks[id]?.kind === 'comment')
+    .map(id => [id, canonicalMarks[id]]));
+  const missingBlockingIds = rehydrated.missingRequiredIds.filter(id => !(id in orphanedComments));
+  if (missingBlockingIds.length > 0) {
     return missingMarkFailure(
       'REQUIRED_MARKS_MISSING',
       'One or more stored Proof marks could not be rehydrated safely',
       rehydrated.strippedMarkdown,
       rehydrated.hydratedIds,
-      rehydrated.missingRequiredIds,
+      missingBlockingIds,
     );
   }
 
@@ -399,5 +405,10 @@ export async function finalizeSuggestionThroughRehydration(args: {
   }
 
   const result = await finalizeRehydratedState(rehydrated.strippedMarkdown, rehydrated.view.state);
-  return result.ok ? { ...result, resolvedMarkIds } : result;
+  return result.ok ? {
+    ...result,
+    marks: { ...result.marks, ...orphanedComments },
+    missingRequiredMarkIds: result.missingRequiredMarkIds.filter(id => !(id in orphanedComments)),
+    resolvedMarkIds,
+  } : result;
 }

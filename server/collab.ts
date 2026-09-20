@@ -6624,6 +6624,14 @@ function buildYjsFallbackReadableDocument(
     );
   const mutationReady = options.mutationReady ?? (handle.degradedReason ? false : computedMutationReady);
   const repairPending = options.repairPending ?? true;
+  // Review requests need a settled projection to obtain a mutation base. Rich
+  // legacy spans can normalize on load without a user edit to trigger saving.
+  // Queue the existing guarded repair instead of leaving state permanently stale.
+  if (source === 'state' && fallbackReason === 'live_doc_ahead' && !handle.degradedReason
+    && !ensureFragmentEditTracking(handle.ydoc).dirty
+    && !persistTimers.has(slug) && !persistInFlight.get(slug)) {
+    queueProjectionRepair(slug, 'state_live_projection_drift');
+  }
 
   return {
     ...row,
@@ -11045,6 +11053,12 @@ export async function startCollabRuntime(mainHttpPort: number): Promise<CollabRu
         touchDoc(slug);
         return loadedDocs.get(slug);
       },
+      async afterLoadDocument(data: { documentName: string; document: Y.Doc }) {
+        // Hocuspocus copies the onLoadDocument result into its own live Y.Doc.
+        // Track that instance before its first browser transaction, otherwise
+        // the first fragment edit looks clean and persistence keeps old text.
+        rememberLoadedDoc(data.documentName, data.document, 'live');
+      },
       async onStoreDocument(data: { documentName: string; document: Y.Doc; context?: unknown; transactionOrigin?: unknown }) {
         if (getContextAccessEpoch(data.context) === null) {
           // Server-origin transactions (e.g. projection refresh / canonical apply) persist explicitly.
@@ -11235,6 +11249,12 @@ export async function startCollabRuntimeEmbedded(mainHttpPort: number): Promise<
         if (doc) pruneExpiredAgentEphemera(slug, doc);
         touchDoc(slug);
         return loadedDocs.get(slug);
+      },
+      async afterLoadDocument(data: { documentName: string; document: Y.Doc }) {
+        // Hocuspocus copies the onLoadDocument result into its own live Y.Doc.
+        // Track that instance before its first browser transaction, otherwise
+        // the first fragment edit looks clean and persistence keeps old text.
+        rememberLoadedDoc(data.documentName, data.document, 'live');
       },
       async onStoreDocument(data: { documentName: string; document: Y.Doc; context?: unknown; transactionOrigin?: unknown }) {
         if (getContextAccessEpoch(data.context) === null) {
@@ -11440,6 +11460,12 @@ export async function startCollabRuntimeAttached(mainHttpServer: HttpServer, mai
         if (doc) pruneExpiredAgentEphemera(slug, doc);
         touchDoc(slug);
         return loadedDocs.get(slug);
+      },
+      async afterLoadDocument(data: { documentName: string; document: Y.Doc }) {
+        // Hocuspocus copies the onLoadDocument result into its own live Y.Doc.
+        // Track that instance before its first browser transaction, otherwise
+        // the first fragment edit looks clean and persistence keeps old text.
+        rememberLoadedDoc(data.documentName, data.document, 'live');
       },
       async onStoreDocument(data: { documentName: string; document: Y.Doc; context?: unknown; transactionOrigin?: unknown }) {
         if (getContextAccessEpoch(data.context) === null) {

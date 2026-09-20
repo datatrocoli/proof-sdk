@@ -6,6 +6,7 @@ import {
   applyAgentPresenceToLoadedCollab,
   applyCanonicalDocumentToCollab,
   buildCollabSession,
+  getCanonicalReadableDocument,
   getCanonicalReadableDocumentSync,
   getCollabRuntime,
   invalidateCollabDocument,
@@ -759,7 +760,7 @@ async function resolveOpenContextAccess(
     return null;
   }
 
-  // Tokenless links default to read-only access.
+  // Tokenless web links grant editing; the slug is the access capability.
   return { role: 'editor', tokenId: null, ownerAuthorized: false };
 }
 
@@ -1931,7 +1932,7 @@ apiRoutes.get('/documents/:slug/open-context', async (req: Request, res: Respons
     res.status(400).json({ error: 'Invalid slug' });
     return;
   }
-  const doc = getCanonicalReadableDocumentSync(slug, 'share') ?? getDocumentBySlug(slug);
+  let doc = getCanonicalReadableDocumentSync(slug, 'share') ?? getDocumentBySlug(slug);
   if (!doc) {
     res.status(404).json({ error: 'Document not found' });
     return;
@@ -1953,6 +1954,9 @@ apiRoutes.get('/documents/:slug/open-context', async (req: Request, res: Respons
   }
 
   const role = access.role;
+  // Seed/verify before issuing a lease, which would otherwise block first-open
+  // initialization and silently downgrade the socket to read-only access.
+  doc = await getCanonicalReadableDocument(slug, 'share') ?? doc;
   const capabilities = deriveShareCapabilities(role, doc.share_state);
   const collabRuntime = getCollabRuntime();
   if (!collabRuntime.enabled) {
@@ -2069,7 +2073,7 @@ apiRoutes.post('/documents/:slug/collab-refresh', async (req: Request, res: Resp
   });
 });
 
-apiRoutes.get('/documents/:slug/collab-session', (req: Request, res: Response) => {
+apiRoutes.get('/documents/:slug/collab-session', async (req: Request, res: Response) => {
   const slug = getSlugParam(req);
   if (!slug) {
     res.status(400).json({ error: 'Invalid slug' });
@@ -2104,6 +2108,10 @@ apiRoutes.get('/documents/:slug/collab-session', (req: Request, res: Response) =
   const ownerAuthorized = canOwnerMutate(req, doc);
   const presentedSecret = getPresentedSecret(req);
   const access = presentedSecret ? resolveDocumentAccess(slug, presentedSecret) : null;
+  if (presentedSecret && !access && !ownerAuthorized) {
+    res.status(401).json({ error: 'Invalid share token', code: 'UNAUTHORIZED' });
+    return;
+  }
   const requestedRole = access?.role ?? getAccessRole(req, slug);
   let role: ShareRole = requestedRole ?? 'editor';
 
@@ -2126,6 +2134,7 @@ apiRoutes.get('/documents/:slug/collab-session', (req: Request, res: Response) =
   const canComment = doc.share_state === 'ACTIVE'
     && (role === 'commenter' || role === 'editor' || role === 'owner_bot');
 
+  await getCanonicalReadableDocument(slug, 'share');
   const session = buildCollabSession(slug, role, {
     tokenId: access?.tokenId ?? null,
     wsUrlBase: resolveRequestScopedCollabWsBase(req),

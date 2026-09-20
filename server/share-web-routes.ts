@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import {
   noteDocumentLiveCollabLease,
   canMutateByOwnerIdentity,
+  createDocumentAccessToken,
   resolveDocumentAccessRole,
   upsertActiveCollabConnection,
 } from './db.js';
@@ -639,7 +640,21 @@ shareWebRoutes.get('/d/:slug', (req: Request, res: Response) => {
   res.append('Link', '</.well-known/agent.json>; rel="agent-discovery"');
   // Option 2: The SPA HTML includes a hidden <div id="agent-instructions"> with
   // API discovery info, visible in raw markup for readability extractors.
-  const configShareToken = tokenSource === 'query:token' ? token : null;
+  // The editable, tokenless web URL uses the slug as its capability. Give its
+  // browser session the matching editor credential so REST review and the
+  // event socket have the same access as the collaboration editor. Reuse a
+  // valid cookie; never promote an explicit viewer/commenter or invalid token.
+  if (!token && doc?.share_state === 'ACTIVE' && !tokenFromQuery && !tokenFromCookie) {
+    token = createDocumentAccessToken(slug, 'editor').secret;
+    res.cookie(shareTokenCookieName(slug), token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecureRequest(req),
+      path: '/',
+    });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  const configShareToken = token;
   const preview = buildSharePreviewModel({
     slug,
     origin,

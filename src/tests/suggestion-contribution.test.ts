@@ -93,14 +93,23 @@ try {
   const markdown = '<span data-proof="suggestion" data-id="server-1" data-kind="insert" data-by="human:Daniel">Full </span><span data-proof="suggestion" data-id="server-2" data-kind="insert" data-by="human:Daniel">contribution.</span>';
   for (const action of ['accept', 'reject'] as const) {
     const first = `server-${action}-1`, second = `server-${action}-2`;
+    const orphanedComment = { kind: 'comment' as const, by: 'human:Reviewer', text: 'Keep this thread.',
+      quote: 'A passage removed earlier.', resolved: false, range: { from: 500, to: 530 } };
     const result = await finalizeSuggestionThroughRehydration({ markdown: markdown.replaceAll('server-1', first).replaceAll('server-2', second), marks: {
+      orphanedComment,
       [first]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'F', quote: 'Full ', startRel: 'char:0', endRel: 'char:5' },
       [second]: { kind: 'insert', by: 'human:Daniel', status: 'pending', content: 'c', quote: 'contribution.', startRel: 'char:5', endRel: 'char:18' },
     }, markId: second, action });
     assert.ok(result.ok, JSON.stringify(result));
     assert.deepEqual(result.resolvedMarkIds, [first, second]);
     assert.ok(!result.marks[first] && !result.marks[second]);
+    assert.equal(result.marks.orphanedComment.text, orphanedComment.text, 'Unanchored comment threads survive unrelated review');
+    assert.equal(result.marks.orphanedComment.resolved, false);
     assert.equal(result.repairedStrippedMarkdown.trim(), action === 'accept' ? 'Full contribution.' : '');
   }
+  const missingTarget = await finalizeSuggestionThroughRehydration({ markdown: 'Existing text.', marks: {
+    lost: { kind: 'insert', by: 'human:Test', status: 'pending', quote: 'Missing contribution.', content: 'Missing contribution.' },
+  }, markId: 'lost', action: 'accept' });
+  assert.equal(missingTarget.ok, false, 'Review still refuses a target that cannot be located');
   console.log('PASS: paused typing, reconnects, accents, grouped review, formatting and shared acceptance/rejection');
 } finally { Date.now = originalNow; }
