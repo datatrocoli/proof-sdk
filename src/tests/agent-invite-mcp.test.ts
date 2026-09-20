@@ -52,7 +52,7 @@ try {
   const link = await share.createAccessLink('commenter');
   assert.ok(link && !('error' in link), 'Create a review invitation from a tokenless document URL');
   assert.notEqual(link.accessToken, accessToken, 'Never forward the browser credential');
-  const invitation = buildAgentInvite(link.webShareUrl);
+  const invitation = buildAgentInvite(link.webShareUrl, 'commenter');
   assert.ok(invitation.includes(`Bearer ${link.accessToken}`));
   assert.ok(!invitation.includes('<token-from-doc-url>'));
   assert.ok(invitation.includes('local MCP connector'));
@@ -62,7 +62,7 @@ try {
   assert.ok(editingLink && !('error' in editingLink));
   assert.notEqual(editingLink.accessToken, accessToken);
   assert.notEqual(editingLink.accessToken, link.accessToken);
-  const editingInvitation = buildAgentInvite(editingLink.webShareUrl, 'editor');
+  const editingInvitation = buildAgentInvite(editingLink.webShareUrl);
   assert.ok(editingInvitation.includes('Invitation role: editor'));
   assert.ok(editingInvitation.includes('baseToken'));
   assert.ok(editingInvitation.includes('proof_edit'));
@@ -73,7 +73,7 @@ try {
   (globalThis as any).window.__PROOF_CONFIG__ = {};
   const tokenlessLink = await new ShareClient().createAccessLink('commenter');
   assert.ok(tokenlessLink && !('error' in tokenlessLink), 'Plain document links can invite a reviewer');
-  assert.ok(buildAgentInvite(tokenlessLink.webShareUrl).includes(tokenlessLink.accessToken));
+  assert.ok(buildAgentInvite(tokenlessLink.webShareUrl, 'commenter').includes(tokenlessLink.accessToken));
   for (const role of ['editor', 'viewer', 'owner_bot']) {
     assert.equal((await post(`/api/documents/${slug}/access-links`, { role })).status, 403,
       'Tokenless invitation must not mint other credentials');
@@ -246,7 +246,7 @@ try {
   assert.ok(humanSegments.some(m => m.quote.includes('Keep')) && humanSegments.some(m => m.quote.includes('intact')), 'Unchanged words retain their original author');
   const events = await call('proof_events');
   assert.ok(events.events.length > 0);
-  console.log('PASS: suggestion invitations stay restricted; editing invitations and MCP use snapshot tokens for direct writes with agent authorship');
+  console.log('PASS: agent invitations support direct editing and suggestions; legacy commenter tokens remain restricted');
 } finally {
   await client.close();
   await editingClient.close();

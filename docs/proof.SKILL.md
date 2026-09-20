@@ -12,7 +12,7 @@ Proof is the hosted product. Proof SDK is the open-source editor, collaboration 
 - Include `by` on every write. Use `ai:<agent-name>`.
 - Treat `slug + token` as the document address and auth pair.
 - Prefer HTTP APIs over local runtime assumptions.
-- Read `agent.auth.role` and `capabilities.canEdit` from state. Commenter invitations allow pending suggestions; direct edits require an editor invitation.
+- Read `agent.auth.role` and `capabilities.canEdit` from state. The single agent invitation grants editor access for suggestions and direct edits; follow the human's requested workflow. Older commenter tokens require a fresh invitation for direct editing.
 - For `/edit/v2`, use refs and `mutationBase.token` from the same snapshot. Follow `/snapshot.contract` or `/state.contract.editV2` rather than assuming every deployment has the same preconditions.
 
 ## Authentication

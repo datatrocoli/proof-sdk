@@ -37,7 +37,7 @@ export function createProofMcp(config) {
     const data = await response.json();
     if (!response.ok || data.success === false) {
       const code = typeof data.code === 'string' ? data.code : 'REQUEST_FAILED';
-      if (response.status === 403) throw new Error(`Proof permission denied (${code}). Direct edits require an editing invitation configured for this document; a suggestion invitation cannot grant that permission.`);
+      if (response.status === 403) throw new Error(`Proof permission denied (${code}). If an older commenter token blocks a requested direct edit, use a fresh agent invite and configure its editor token for this document.`);
       throw new Error(`Proof request failed (${response.status}, ${code}). Check document access and server health.`);
     }
     return data;
@@ -72,7 +72,7 @@ export function createProofMcp(config) {
   const block = z.object({ markdown: z.string().max(200000) });
   const ref = z.string().min(1).max(200);
   server.registerTool('proof_edit', {
-    description: 'Apply a requested direct edit with agent authorship. Requires an editing invitation. Use block refs and baseToken from the same proof_snapshot result. On STALE_BASE, reread and reconsider the targets; do not blindly retry.',
+    description: 'Apply a requested direct edit with agent authorship. Requires the editor token from an agent invite. Use block refs and baseToken from the same proof_snapshot result. On STALE_BASE, reread and reconsider the targets; do not blindly retry.',
     inputSchema: {
       baseToken: z.string().min(1),
       operations: z.array(z.discriminatedUnion('op', [

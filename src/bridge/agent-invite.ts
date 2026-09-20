@@ -1,5 +1,5 @@
 /** Build an invitation only from a complete, shareable access link. */
-export function buildAgentInvite(shareUrl: string, role: 'commenter' | 'editor' = 'commenter'): string {
+export function buildAgentInvite(shareUrl: string, role: 'commenter' | 'editor' = 'editor'): string {
   const url = new URL(shareUrl);
   const match = url.pathname.match(/^\/d\/([^/]+)\/?$/);
   const token = url.searchParams.get('token')?.trim();
@@ -18,7 +18,7 @@ export function buildAgentInvite(shareUrl: string, role: 'commenter' | 'editor' 
       'Use a local HTTP tool or the Proof local MCP connector in Claude Desktop.',
       'If the Proof connector is available, call proof_read, then proof_presence,',
       role === 'editor'
-        ? 'For direct edits, use proof_snapshot then proof_edit with that snapshot’s baseToken. The connector must use an editor invitation for this document.'
+        ? 'Use proof_comment or proof_suggest for review. For direct edits, use proof_snapshot then proof_edit with that snapshot’s baseToken. The connector must use this document’s editor token.'
         : 'Use proof_comment or proof_suggest. No browser login is required.',
     ] : []),
     '',

@@ -79,12 +79,13 @@ If a URL contains `?token=`, treat it as an access token:
 - Preferred: `Authorization: Bearer <token>`
 - Also accepted: `x-share-token: <token>`
 
-Check `agent.auth.role` and `capabilities.canEdit` in `/state`. A suggestion
-invitation grants `commenter` access: comments and pending suggestions only.
-An editing invitation grants `editor` access, including direct edits and review
-decisions. `403 FORBIDDEN` is a permission failure; changing `baseToken` or
-`baseRevision` cannot grant a higher role. Ask the human for **Add agent → Copy
-editing invite** if direct edits are intended. Keep each invitation private.
+Check `agent.auth.role` and `capabilities.canEdit` in `/state`. **Add agent → Copy
+agent invite link** grants `editor` access for comments, suggestions, direct edits,
+and review decisions. Follow the human's requested workflow. Older invitations
+may still have `commenter` access, allowing only comments and pending suggestions.
+`403 FORBIDDEN` is a permission failure; changing `baseToken` or `baseRevision`
+cannot grant a higher role. Ask for a fresh agent invite if an older token blocks
+a requested direct edit. Keep each invitation private.
 
 ## Edit Via Ops (Comments, Suggestions, Rewrite)
 

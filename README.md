@@ -62,11 +62,11 @@ docker compose down --volumes --rmi local
 The image uses Node 22, installs the committed dependency lockfile, builds the
 editor, and runs as the non-root `node` user. No host Node installation is needed.
 
-**Add agent → Copy suggestion invite** creates a separate commenter token:
-the agent can read, comment and propose changes for an editor to review.
-**Copy editing invite** creates an editor token, allowing direct edits and
-accepting or rejecting suggestions. Existing invitations keep their permissions.
-Both include the new token even when the address bar has no `?token=`.
+**Add agent → Copy agent invite link** creates one invitation with a separate
+editor token. The agent can comment, suggest changes, or edit directly; tell it
+which workflow you want. Existing invitations keep their permissions, so replace
+older commenter invitations with a fresh invite when direct editing is needed.
+The invitation includes its token even when the address bar has no `?token=`.
 Keep copied invitations private. Each click creates a new access link.
 
 Claude Desktop chat needs a local MCP connector to reach this server. Pasting a
